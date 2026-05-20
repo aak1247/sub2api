@@ -195,6 +195,11 @@ type SystemSettings struct {
 	// OpenAI account scheduling
 	OpenAIAdvancedSchedulerEnabled bool `json:"openai_advanced_scheduler_enabled"`
 
+	// Token refresh scheduled random refresh
+	TokenRefreshScheduledEnabled            bool `json:"token_refresh_scheduled_enabled"`
+	TokenRefreshScheduledMinIntervalMinutes int  `json:"token_refresh_scheduled_min_interval_minutes"`
+	TokenRefreshScheduledMaxIntervalMinutes int  `json:"token_refresh_scheduled_max_interval_minutes"`
+
 	// Payment configuration
 	PaymentEnabled                   bool     `json:"payment_enabled"`
 	PaymentMinAmount                 float64  `json:"payment_min_amount"`

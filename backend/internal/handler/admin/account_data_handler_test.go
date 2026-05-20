@@ -17,6 +17,11 @@ type dataResponse struct {
 	Data dataPayload `json:"data"`
 }
 
+type searchResponse struct {
+	Code int         `json:"code"`
+	Data searchBlock `json:"data"`
+}
+
 type dataPayload struct {
 	Type     string        `json:"type"`
 	Version  int           `json:"version"`
@@ -46,6 +51,21 @@ type dataAccount struct {
 	Priority    int            `json:"priority"`
 }
 
+type searchBlock struct {
+	AccountCandidates int               `json:"account_candidates"`
+	AccountMatched    int               `json:"account_matched"`
+	AccountFailed     int               `json:"account_failed"`
+	Accounts          []searchAccount   `json:"accounts"`
+	Errors            []DataImportError `json:"errors"`
+}
+
+type searchAccount struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+	Type     string `json:"type"`
+}
+
 func setupAccountDataRouter() (*gin.Engine, *stubAdminService) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -68,6 +88,7 @@ func setupAccountDataRouter() (*gin.Engine, *stubAdminService) {
 	)
 
 	router.GET("/api/v1/admin/accounts/data", h.ExportData)
+	router.POST("/api/v1/admin/accounts/data/search", h.SearchData)
 	router.POST("/api/v1/admin/accounts/data", h.ImportData)
 	return router, adminSvc
 }
@@ -274,4 +295,60 @@ func TestImportDataReusesProxyAndSkipsDefaultGroup(t *testing.T) {
 	require.Len(t, adminSvc.createdProxies, 0)
 	require.Len(t, adminSvc.createdAccounts, 1)
 	require.True(t, adminSvc.createdAccounts[0].SkipDefaultGroupBind)
+}
+
+func TestSearchDataFindsExistingAccountsWithoutImporting(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+	adminSvc.accounts = []service.Account{
+		{ID: 101, Name: "acc", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive},
+		{ID: 102, Name: "other", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive},
+	}
+
+	dataPayload := map[string]any{
+		"data": map[string]any{
+			"type":    dataType,
+			"version": dataVersion,
+			"proxies": []map[string]any{
+				{
+					"proxy_key": "socks5|1.2.3.4|1080|u|p",
+					"name":      "proxy",
+					"protocol":  "socks5",
+					"host":      "1.2.3.4",
+					"port":      1080,
+					"username":  "u",
+					"password":  "p",
+					"status":    "active",
+				},
+			},
+			"accounts": []map[string]any{
+				{
+					"name":        "acc",
+					"platform":    service.PlatformOpenAI,
+					"type":        service.AccountTypeOAuth,
+					"credentials": map[string]any{"token": "x"},
+					"proxy_key":   "socks5|1.2.3.4|1080|u|p",
+					"concurrency": 3,
+					"priority":    50,
+				},
+			},
+		},
+	}
+
+	body, _ := json.Marshal(dataPayload)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data/search", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp searchResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Equal(t, 1, resp.Data.AccountCandidates)
+	require.Equal(t, 1, resp.Data.AccountMatched)
+	require.Len(t, resp.Data.Accounts, 1)
+	require.Equal(t, int64(101), resp.Data.Accounts[0].ID)
+	require.Equal(t, "acc", resp.Data.Accounts[0].Name)
+	require.Len(t, adminSvc.createdAccounts, 0)
+	require.Len(t, adminSvc.createdProxies, 0)
 }

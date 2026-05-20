@@ -16,6 +16,7 @@ import type {
   TempUnschedulableStatus,
   AdminDataPayload,
   AdminDataImportResult,
+  AdminDataSearchResult,
   CodexSessionImportRequest,
   CodexSessionImportResult,
   CheckMixedChannelRequest,
@@ -566,6 +567,15 @@ export async function importData(payload: {
   return data
 }
 
+export async function searchData(payload: {
+  data: AdminDataPayload
+}): Promise<AdminDataSearchResult> {
+  const { data } = await apiClient.post<AdminDataSearchResult>('/admin/accounts/data/search', {
+    data: payload.data
+  })
+  return data
+}
+
 export async function importCodexSession(payload: CodexSessionImportRequest): Promise<CodexSessionImportResult> {
   const { data } = await apiClient.post<CodexSessionImportResult>('/admin/accounts/import/codex-session', payload)
   return data
@@ -688,6 +698,7 @@ export const accountsAPI = {
   syncFromCrs,
   exportData,
   importData,
+  searchData,
   importCodexSession,
   getAntigravityDefaultModelMapping,
   batchClearError,

@@ -684,6 +684,9 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyAvailableChannelsEnabled,
 		SettingKeyAffiliateEnabled,
 		SettingKeyRiskControlEnabled,
+		SettingKeyTokenRefreshScheduledEnabled,
+		SettingKeyTokenRefreshScheduledMinInterval,
+		SettingKeyTokenRefreshScheduledMaxInterval,
 	}
 
 	settings, err := s.settingRepo.GetMultiple(ctx, keys)
@@ -805,6 +808,9 @@ const (
 	channelMonitorIntervalMin      = 15
 	channelMonitorIntervalMax      = 3600
 	channelMonitorIntervalFallback = 60
+
+	tokenRefreshScheduledDefaultMinMinutes = 60
+	tokenRefreshScheduledDefaultMaxMinutes = 180
 )
 
 // parseChannelMonitorInterval parses the stored string and clamps to [15, 3600].
@@ -860,6 +866,13 @@ type AvailableChannelsRuntime struct {
 	Enabled bool
 }
 
+// TokenRefreshScheduledRuntime is the runtime view consumed by TokenRefreshService.
+type TokenRefreshScheduledRuntime struct {
+	Enabled            bool
+	MinIntervalMinutes int
+	MaxIntervalMinutes int
+}
+
 // GetAvailableChannelsRuntime reads the available-channels feature switch directly
 // from the settings store. Fail-closed: on error returns Enabled=false, matching
 // the opt-in default (unknown ↔ disabled).
@@ -870,6 +883,73 @@ func (s *SettingService) GetAvailableChannelsRuntime(ctx context.Context) Availa
 	}
 	return AvailableChannelsRuntime{
 		Enabled: vals[SettingKeyAvailableChannelsEnabled] == "true",
+	}
+}
+
+// GetTokenRefreshScheduledRuntime reads the scheduled token refresh settings at runtime.
+// Missing settings fall back to config.yaml first, then to disabled with sane UI defaults.
+func (s *SettingService) GetTokenRefreshScheduledRuntime(ctx context.Context) TokenRefreshScheduledRuntime {
+	fallback := tokenRefreshScheduledRuntimeFromSettings(nil, s.cfg)
+	if s == nil || s.settingRepo == nil {
+		return fallback
+	}
+	vals, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyTokenRefreshScheduledEnabled,
+		SettingKeyTokenRefreshScheduledMinInterval,
+		SettingKeyTokenRefreshScheduledMaxInterval,
+	})
+	if err != nil {
+		return fallback
+	}
+	return tokenRefreshScheduledRuntimeFromSettings(vals, s.cfg)
+}
+
+func tokenRefreshScheduledRuntimeFromSettings(settings map[string]string, cfg *config.Config) TokenRefreshScheduledRuntime {
+	defaultMin := tokenRefreshScheduledDefaultMinMinutes
+	defaultMax := tokenRefreshScheduledDefaultMaxMinutes
+	defaultEnabled := false
+	if cfg != nil {
+		cfgMin := cfg.TokenRefresh.ScheduledRefreshMinIntervalMinutes
+		cfgMax := cfg.TokenRefresh.ScheduledRefreshMaxIntervalMinutes
+		if cfgMin > 0 {
+			defaultMin = cfgMin
+		}
+		if cfgMax >= defaultMin {
+			defaultMax = cfgMax
+		} else if cfgMax > 0 {
+			defaultMax = defaultMin
+		}
+		defaultEnabled = cfgMin > 0 && cfgMax >= cfgMin
+	}
+
+	enabled := defaultEnabled
+	minMinutes := defaultMin
+	maxMinutes := defaultMax
+	if settings != nil {
+		if raw, ok := settings[SettingKeyTokenRefreshScheduledEnabled]; ok {
+			enabled = raw == "true"
+		}
+		if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyTokenRefreshScheduledMinInterval])); err == nil && v > 0 {
+			minMinutes = v
+		}
+		if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyTokenRefreshScheduledMaxInterval])); err == nil && v > 0 {
+			maxMinutes = v
+		}
+	}
+
+	if minMinutes <= 0 {
+		minMinutes = tokenRefreshScheduledDefaultMinMinutes
+	}
+	if maxMinutes < minMinutes {
+		maxMinutes = minMinutes
+	}
+	if enabled && (minMinutes <= 0 || maxMinutes < minMinutes) {
+		enabled = false
+	}
+	return TokenRefreshScheduledRuntime{
+		Enabled:            enabled,
+		MinIntervalMinutes: minMinutes,
+		MaxIntervalMinutes: maxMinutes,
 	}
 }
 
@@ -1753,6 +1833,16 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	// 风控中心功能开关
 	updates[SettingKeyRiskControlEnabled] = strconv.FormatBool(settings.RiskControlEnabled)
 
+	// Token 定时随机刷新
+	tokenRefreshRuntime := tokenRefreshScheduledRuntimeFromSettings(map[string]string{
+		SettingKeyTokenRefreshScheduledEnabled:     strconv.FormatBool(settings.TokenRefreshScheduledEnabled),
+		SettingKeyTokenRefreshScheduledMinInterval: strconv.Itoa(settings.TokenRefreshScheduledMinIntervalMinutes),
+		SettingKeyTokenRefreshScheduledMaxInterval: strconv.Itoa(settings.TokenRefreshScheduledMaxIntervalMinutes),
+	}, s.cfg)
+	updates[SettingKeyTokenRefreshScheduledEnabled] = strconv.FormatBool(tokenRefreshRuntime.Enabled)
+	updates[SettingKeyTokenRefreshScheduledMinInterval] = strconv.Itoa(tokenRefreshRuntime.MinIntervalMinutes)
+	updates[SettingKeyTokenRefreshScheduledMaxInterval] = strconv.Itoa(tokenRefreshRuntime.MaxIntervalMinutes)
+
 	// Claude Code version check
 	updates[SettingKeyMinClaudeCodeVersion] = settings.MinClaudeCodeVersion
 	updates[SettingKeyMaxClaudeCodeVersion] = settings.MaxClaudeCodeVersion
@@ -2594,6 +2684,11 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		// 风控中心功能（默认关闭，显式启用）
 		SettingKeyRiskControlEnabled: "false",
 
+		// OAuth token 定时随机刷新（默认关闭）
+		SettingKeyTokenRefreshScheduledEnabled:     "false",
+		SettingKeyTokenRefreshScheduledMinInterval: strconv.Itoa(tokenRefreshScheduledDefaultMinMinutes),
+		SettingKeyTokenRefreshScheduledMaxInterval: strconv.Itoa(tokenRefreshScheduledDefaultMaxMinutes),
+
 		// Claude Code version check (default: empty = disabled)
 		SettingKeyMinClaudeCodeVersion: "",
 		SettingKeyMaxClaudeCodeVersion: "",
@@ -3093,6 +3188,10 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// 风控中心功能（默认关闭，严格 true 才启用）
 	result.RiskControlEnabled = settings[SettingKeyRiskControlEnabled] == "true"
+	tokenRefreshRuntime := tokenRefreshScheduledRuntimeFromSettings(settings, s.cfg)
+	result.TokenRefreshScheduledEnabled = tokenRefreshRuntime.Enabled
+	result.TokenRefreshScheduledMinIntervalMinutes = tokenRefreshRuntime.MinIntervalMinutes
+	result.TokenRefreshScheduledMaxIntervalMinutes = tokenRefreshRuntime.MaxIntervalMinutes
 
 	// Claude Code version check
 	result.MinClaudeCodeVersion = settings[SettingKeyMinClaudeCodeVersion]

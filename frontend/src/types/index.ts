@@ -1117,6 +1117,14 @@ export interface AdminDataImportResult {
   errors?: AdminDataImportError[]
 }
 
+export interface AdminDataSearchResult {
+  account_candidates: number
+  account_matched: number
+  account_failed: number
+  accounts?: Account[]
+  errors?: AdminDataImportError[]
+}
+
 export interface CodexSessionImportRequest {
   content?: string
   contents?: string[]

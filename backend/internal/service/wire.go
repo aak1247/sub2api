@@ -59,8 +59,10 @@ func ProvideTokenRefreshService(
 	privacyClientFactory PrivacyClientFactory,
 	proxyRepo ProxyRepository,
 	refreshAPI *OAuthRefreshAPI,
+	settingService *SettingService,
 ) *TokenRefreshService {
 	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, geminiOAuthService, antigravityOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache)
+	svc.SetSettingService(settingService)
 	// 注入 OpenAI privacy opt-out 依赖
 	svc.SetPrivacyDeps(privacyClientFactory, proxyRepo)
 	// 注入统一 OAuth 刷新 API（消除 TokenRefreshService 与 TokenProvider 之间的竞争条件）

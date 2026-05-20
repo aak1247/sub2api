@@ -535,6 +535,9 @@ export interface SystemSettings {
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
   openai_advanced_scheduler_enabled?: boolean;
+  token_refresh_scheduled_enabled: boolean;
+  token_refresh_scheduled_min_interval_minutes: number;
+  token_refresh_scheduled_max_interval_minutes: number;
 
   // Balance & quota notification
   balance_low_notify_enabled: boolean;
@@ -754,6 +757,9 @@ export interface UpdateSettingsRequest {
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
   openai_advanced_scheduler_enabled?: boolean;
+  token_refresh_scheduled_enabled?: boolean;
+  token_refresh_scheduled_min_interval_minutes?: number;
+  token_refresh_scheduled_max_interval_minutes?: number;
   // Balance & quota notification
   balance_low_notify_enabled?: boolean;
   balance_low_notify_threshold?: number;

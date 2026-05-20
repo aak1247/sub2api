@@ -111,11 +111,14 @@ const (
 	SettingKeyAffiliateRebateDurationDays      = "affiliate_rebate_duration_days"      // 返利有效期（天，0=永久）
 	SettingKeyAffiliateRebatePerInviteeCap     = "affiliate_rebate_per_invitee_cap"    // 单人返利上限（0=无上限）
 	SettingKeyRiskControlEnabled               = "risk_control_enabled"                // 是否启用风控中心入口与审计链路
-	SettingKeyContentModerationConfig          = "content_moderation_config"           // 内容审计配置（JSON）
-	SettingKeyLoginAgreementEnabled            = "login_agreement_enabled"             // 登录前是否要求同意条款
-	SettingKeyLoginAgreementMode               = "login_agreement_mode"                // 条款确认展示模式：modal / checkbox
-	SettingKeyLoginAgreementUpdatedAt          = "login_agreement_updated_at"          // 条款更新日期（展示用）
-	SettingKeyLoginAgreementDocuments          = "login_agreement_documents"           // 条款文档列表（JSON，Markdown 内容）
+	SettingKeyTokenRefreshScheduledEnabled     = "token_refresh_scheduled_enabled"     // 是否启用 OAuth token 定时随机刷新
+	SettingKeyTokenRefreshScheduledMinInterval = "token_refresh_scheduled_min_interval_minutes"
+	SettingKeyTokenRefreshScheduledMaxInterval = "token_refresh_scheduled_max_interval_minutes"
+	SettingKeyContentModerationConfig          = "content_moderation_config"  // 内容审计配置（JSON）
+	SettingKeyLoginAgreementEnabled            = "login_agreement_enabled"    // 登录前是否要求同意条款
+	SettingKeyLoginAgreementMode               = "login_agreement_mode"       // 条款确认展示模式：modal / checkbox
+	SettingKeyLoginAgreementUpdatedAt          = "login_agreement_updated_at" // 条款更新日期（展示用）
+	SettingKeyLoginAgreementDocuments          = "login_agreement_documents"  // 条款文档列表（JSON，Markdown 内容）
 
 	// 邮件服务设置
 	SettingKeySMTPHost     = "smtp_host"      // SMTP服务器地址

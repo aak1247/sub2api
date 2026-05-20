@@ -604,6 +604,14 @@ sora:
 # Token refresh behavior
 # token 刷新行为控制
 token_refresh:
+  # Whether token auto refresh is enabled
+  # 是否启用 token 自动刷新
+  enabled: true
+  # Check interval in minutes
+  # 检查间隔（分钟），默认每 3 分钟执行一次
+  check_interval_minutes: 3
+  # Scheduled random refresh is configured at runtime in Admin Settings > Feature Switches
+  # 定时随机刷新在后台「系统设置 > 功能开关」中运行时配置
   # Whether OpenAI refresh flow is allowed to sync linked Sora accounts
   # 是否允许 OpenAI 刷新流程同步覆盖 linked_openai_account_id 关联的 Sora 账号 token
   sync_linked_sora_accounts: false

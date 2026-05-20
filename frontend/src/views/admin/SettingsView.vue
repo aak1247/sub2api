@@ -5109,6 +5109,60 @@
           </div>
         </div>
 
+        <div class="card">
+          <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.settings.features.tokenRefresh.title') }}
+            </h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {{ t('admin.settings.features.tokenRefresh.description') }}
+            </p>
+          </div>
+          <div class="space-y-5 p-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t('admin.settings.features.tokenRefresh.enabled') }}
+                </label>
+                <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.features.tokenRefresh.enabledHint') }}
+                </p>
+              </div>
+              <Toggle v-model="form.token_refresh_scheduled_enabled" />
+            </div>
+
+            <div v-if="form.token_refresh_scheduled_enabled" class="grid gap-4 md:grid-cols-2">
+              <div>
+                <label class="input-label">
+                  {{ t('admin.settings.features.tokenRefresh.minInterval') }}
+                  <span class="text-red-500">*</span>
+                </label>
+                <input
+                  v-model.number="form.token_refresh_scheduled_min_interval_minutes"
+                  type="number"
+                  min="1"
+                  class="input"
+                />
+              </div>
+              <div>
+                <label class="input-label">
+                  {{ t('admin.settings.features.tokenRefresh.maxInterval') }}
+                  <span class="text-red-500">*</span>
+                </label>
+                <input
+                  v-model.number="form.token_refresh_scheduled_max_interval_minutes"
+                  type="number"
+                  min="1"
+                  class="input"
+                />
+              </div>
+              <p class="md:col-span-2 text-xs text-gray-400">
+                {{ t('admin.settings.features.tokenRefresh.intervalHint') }}
+              </p>
+            </div>
+          </div>
+        </div>
+
         <!-- Affiliate (邀请返利) feature card -->
         <div class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
@@ -6780,6 +6834,9 @@ type SettingsForm = Omit<
   google_oauth_client_secret: string;
   force_email_on_third_party_signup: boolean;
   openai_advanced_scheduler_enabled: boolean;
+  token_refresh_scheduled_enabled: boolean;
+  token_refresh_scheduled_min_interval_minutes: number;
+  token_refresh_scheduled_max_interval_minutes: number;
 };
 
 const form = reactive<SettingsForm>({
@@ -6965,6 +7022,9 @@ const form = reactive<SettingsForm>({
   // 分组隔离
   allow_ungrouped_key_scheduling: false,
   openai_advanced_scheduler_enabled: false,
+  token_refresh_scheduled_enabled: false,
+  token_refresh_scheduled_min_interval_minutes: 60,
+  token_refresh_scheduled_max_interval_minutes: 180,
   // Gateway forwarding behavior
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
@@ -8104,6 +8164,11 @@ async function saveSettings() {
         form.payment_cancel_rate_limit_window_mode,
       payment_alipay_force_qrcode: form.payment_alipay_force_qrcode,
       openai_advanced_scheduler_enabled: form.openai_advanced_scheduler_enabled,
+      token_refresh_scheduled_enabled: form.token_refresh_scheduled_enabled,
+      token_refresh_scheduled_min_interval_minutes:
+        Number(form.token_refresh_scheduled_min_interval_minutes) || 60,
+      token_refresh_scheduled_max_interval_minutes:
+        Number(form.token_refresh_scheduled_max_interval_minutes) || 180,
       // Balance & quota notification
       balance_low_notify_enabled: form.balance_low_notify_enabled,
       balance_low_notify_threshold:

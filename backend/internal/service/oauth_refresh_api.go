@@ -78,6 +78,27 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	executor OAuthRefreshExecutor,
 	refreshWindow time.Duration,
 ) (*OAuthRefreshResult, error) {
+	return api.refresh(ctx, account, executor, refreshWindow, false)
+}
+
+// RefreshForced 在分布式锁保护下强制刷新 OAuth token。
+// 与 RefreshIfNeeded 相同，但跳过“是否临近过期”的二次检查，用于定时随机刷新。
+func (api *OAuthRefreshAPI) RefreshForced(
+	ctx context.Context,
+	account *Account,
+	executor OAuthRefreshExecutor,
+	refreshWindow time.Duration,
+) (*OAuthRefreshResult, error) {
+	return api.refresh(ctx, account, executor, refreshWindow, true)
+}
+
+func (api *OAuthRefreshAPI) refresh(
+	ctx context.Context,
+	account *Account,
+	executor OAuthRefreshExecutor,
+	refreshWindow time.Duration,
+	force bool,
+) (*OAuthRefreshResult, error) {
 	cacheKey := executor.CacheKey(account)
 
 	// 0. 获取进程内互斥锁（防止同一进程内的并发刷新竞争）
@@ -119,7 +140,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	}
 
 	// 3. 二次检查是否仍需刷新（另一条路径可能已刷新）
-	if !executor.NeedsRefresh(freshAccount, refreshWindow) {
+	if !force && !executor.NeedsRefresh(freshAccount, refreshWindow) {
 		return &OAuthRefreshResult{
 			Account: freshAccount,
 		}, nil

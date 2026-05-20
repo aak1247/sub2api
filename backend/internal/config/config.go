@@ -522,6 +522,10 @@ type TokenRefreshConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 	// 检查间隔（分钟）
 	CheckIntervalMinutes int `mapstructure:"check_interval_minutes"`
+	// 定时随机刷新最小间隔（分钟），0 表示禁用定时随机刷新
+	ScheduledRefreshMinIntervalMinutes int `mapstructure:"scheduled_refresh_min_interval_minutes"`
+	// 定时随机刷新最大间隔（分钟），0 表示禁用定时随机刷新
+	ScheduledRefreshMaxIntervalMinutes int `mapstructure:"scheduled_refresh_max_interval_minutes"`
 	// 提前刷新时间（小时），在token过期前多久开始刷新
 	RefreshBeforeExpiryHours float64 `mapstructure:"refresh_before_expiry_hours"`
 	// 最大重试次数
@@ -1843,7 +1847,9 @@ func setDefaults() {
 
 	// TokenRefresh
 	viper.SetDefault("token_refresh.enabled", true)
-	viper.SetDefault("token_refresh.check_interval_minutes", 5)        // 每5分钟检查一次
+	viper.SetDefault("token_refresh.check_interval_minutes", 3) // 每3分钟检查一次
+	viper.SetDefault("token_refresh.scheduled_refresh_min_interval_minutes", 0)
+	viper.SetDefault("token_refresh.scheduled_refresh_max_interval_minutes", 0)
 	viper.SetDefault("token_refresh.refresh_before_expiry_hours", 0.5) // 提前30分钟刷新（适配Google 1小时token）
 	viper.SetDefault("token_refresh.max_retries", 3)                   // 最多重试3次
 	viper.SetDefault("token_refresh.retry_backoff_seconds", 2)         // 重试退避基础2秒
@@ -1926,6 +1932,23 @@ func (c *Config) Validate() error {
 	}
 	if c.SubscriptionMaintenance.QueueSize < 0 {
 		return fmt.Errorf("subscription_maintenance.queue_size must be non-negative")
+	}
+	if c.TokenRefresh.CheckIntervalMinutes < 0 {
+		return fmt.Errorf("token_refresh.check_interval_minutes must be non-negative")
+	}
+	if c.TokenRefresh.ScheduledRefreshMinIntervalMinutes < 0 {
+		return fmt.Errorf("token_refresh.scheduled_refresh_min_interval_minutes must be non-negative")
+	}
+	if c.TokenRefresh.ScheduledRefreshMaxIntervalMinutes < 0 {
+		return fmt.Errorf("token_refresh.scheduled_refresh_max_interval_minutes must be non-negative")
+	}
+	if c.TokenRefresh.ScheduledRefreshMinIntervalMinutes > 0 || c.TokenRefresh.ScheduledRefreshMaxIntervalMinutes > 0 {
+		if c.TokenRefresh.ScheduledRefreshMinIntervalMinutes <= 0 || c.TokenRefresh.ScheduledRefreshMaxIntervalMinutes <= 0 {
+			return fmt.Errorf("token_refresh scheduled refresh min/max intervals must both be positive or both be zero")
+		}
+		if c.TokenRefresh.ScheduledRefreshMinIntervalMinutes > c.TokenRefresh.ScheduledRefreshMaxIntervalMinutes {
+			return fmt.Errorf("token_refresh.scheduled_refresh_min_interval_minutes must be <= scheduled_refresh_max_interval_minutes")
+		}
 	}
 
 	// Gemini OAuth 配置校验：client_id 与 client_secret 必须同时设置或同时留空。

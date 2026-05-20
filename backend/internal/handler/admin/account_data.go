@@ -66,6 +66,10 @@ type DataImportRequest struct {
 	SkipDefaultGroupBind *bool       `json:"skip_default_group_bind"`
 }
 
+type DataSearchRequest struct {
+	Data DataPayload `json:"data"`
+}
+
 type DataImportResult struct {
 	ProxyCreated   int               `json:"proxy_created"`
 	ProxyReused    int               `json:"proxy_reused"`
@@ -73,6 +77,14 @@ type DataImportResult struct {
 	AccountCreated int               `json:"account_created"`
 	AccountFailed  int               `json:"account_failed"`
 	Errors         []DataImportError `json:"errors,omitempty"`
+}
+
+type DataSearchResult struct {
+	AccountCandidates int                      `json:"account_candidates"`
+	AccountMatched    int                      `json:"account_matched"`
+	AccountFailed     int                      `json:"account_failed"`
+	Accounts          []AccountWithConcurrency `json:"accounts,omitempty"`
+	Errors            []DataImportError        `json:"errors,omitempty"`
 }
 
 type DataImportError struct {
@@ -190,6 +202,78 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 	executeAdminIdempotentJSON(c, "admin.accounts.import_data", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		return h.importData(ctx, req)
 	})
+}
+
+func (h *AccountHandler) SearchData(c *gin.Context) {
+	var req DataSearchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	if err := validateDataHeader(req.Data); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	result, err := h.searchData(c.Request.Context(), req)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, result)
+}
+
+func (h *AccountHandler) searchData(ctx context.Context, req DataSearchRequest) (DataSearchResult, error) {
+	dataPayload := req.Data
+	result := DataSearchResult{}
+	candidateKeys := make(map[string]struct{}, len(dataPayload.Accounts))
+
+	for i := range dataPayload.Accounts {
+		item := dataPayload.Accounts[i]
+		if err := validateDataAccount(item); err != nil {
+			result.AccountFailed++
+			result.Errors = append(result.Errors, DataImportError{
+				Kind:    "account",
+				Name:    item.Name,
+				Message: err.Error(),
+			})
+			continue
+		}
+
+		key := dataAccountSearchKey(item.Name, item.Platform, item.Type)
+		if _, ok := candidateKeys[key]; !ok {
+			candidateKeys[key] = struct{}{}
+			result.AccountCandidates++
+		}
+	}
+
+	if len(candidateKeys) == 0 {
+		return result, nil
+	}
+
+	existingAccounts, err := h.listAccountsFiltered(ctx, "", "", "", "", 0, "", "name", "asc")
+	if err != nil {
+		return result, err
+	}
+
+	for i := range existingAccounts {
+		acc := existingAccounts[i]
+		key := dataAccountSearchKey(acc.Name, acc.Platform, acc.Type)
+		if _, ok := candidateKeys[key]; !ok {
+			continue
+		}
+		account := acc
+		result.Accounts = append(result.Accounts, h.buildAccountResponseWithRuntime(ctx, &account))
+	}
+	result.AccountMatched = len(result.Accounts)
+
+	return result, nil
+}
+
+func dataAccountSearchKey(name, platform, accountType string) string {
+	return strings.ToLower(strings.TrimSpace(name)) + "\x00" + strings.ToLower(strings.TrimSpace(platform)) + "\x00" + strings.ToLower(strings.TrimSpace(accountType))
 }
 
 func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) (DataImportResult, error) {

@@ -41,24 +41,56 @@
       </div>
 
       <div
-        v-if="result"
+        v-if="searchResult"
+        class="space-y-2 rounded-xl border border-blue-200 p-4 dark:border-blue-900/60"
+      >
+        <div class="text-sm font-medium text-gray-900 dark:text-white">
+          {{ t('admin.accounts.dataSearchResult') }}
+        </div>
+        <div class="text-sm text-gray-700 dark:text-dark-300">
+          {{ t('admin.accounts.dataSearchResultSummary', searchResult) }}
+        </div>
+
+        <div v-if="searchAccounts.length" class="mt-2">
+          <div class="text-sm font-medium text-gray-700 dark:text-dark-200">
+            {{ t('admin.accounts.dataSearchAccounts') }}
+          </div>
+          <div class="mt-2 max-h-48 overflow-auto rounded-lg bg-gray-50 p-3 text-xs dark:bg-dark-800">
+            <div v-for="(item, idx) in searchAccounts" :key="idx" class="whitespace-pre-wrap">
+              #{{ item.id }} · {{ item.name }} · {{ item.platform }} · {{ item.type }}
+            </div>
+          </div>
+        </div>
+
+        <div v-if="searchErrors.length" class="mt-2">
+          <div class="text-sm font-medium text-red-600 dark:text-red-400">
+            {{ t('admin.accounts.dataSearchErrors') }}
+          </div>
+          <div class="mt-2 max-h-48 overflow-auto rounded-lg bg-gray-50 p-3 font-mono text-xs dark:bg-dark-800">
+            <div v-for="(item, idx) in searchErrors" :key="idx" class="whitespace-pre-wrap">
+              {{ item.kind }} {{ item.name || item.proxy_key || '-' }} — {{ item.message }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-if="importResult"
         class="space-y-2 rounded-xl border border-gray-200 p-4 dark:border-dark-700"
       >
         <div class="text-sm font-medium text-gray-900 dark:text-white">
           {{ t('admin.accounts.dataImportResult') }}
         </div>
         <div class="text-sm text-gray-700 dark:text-dark-300">
-          {{ t('admin.accounts.dataImportResultSummary', result) }}
+          {{ t('admin.accounts.dataImportResultSummary', importResult) }}
         </div>
 
-        <div v-if="errorItems.length" class="mt-2">
+        <div v-if="importErrors.length" class="mt-2">
           <div class="text-sm font-medium text-red-600 dark:text-red-400">
             {{ t('admin.accounts.dataImportErrors') }}
           </div>
-          <div
-            class="mt-2 max-h-48 overflow-auto rounded-lg bg-gray-50 p-3 font-mono text-xs dark:bg-dark-800"
-          >
-            <div v-for="(item, idx) in errorItems" :key="idx" class="whitespace-pre-wrap">
+          <div class="mt-2 max-h-48 overflow-auto rounded-lg bg-gray-50 p-3 font-mono text-xs dark:bg-dark-800">
+            <div v-for="(item, idx) in importErrors" :key="idx" class="whitespace-pre-wrap">
               {{ item.kind }} {{ item.name || item.proxy_key || '-' }} — {{ item.message }}
             </div>
           </div>
@@ -67,18 +99,23 @@
     </form>
 
     <template #footer>
-      <div class="flex justify-end gap-3">
-        <button class="btn btn-secondary" type="button" :disabled="importing" @click="handleClose">
+      <div class="flex w-full items-center justify-between gap-3">
+        <button class="btn btn-secondary" type="button" :disabled="busy" @click="handleClose">
           {{ t('common.cancel') }}
         </button>
-        <button
-          class="btn btn-primary"
-          type="submit"
-          form="import-data-form"
-          :disabled="importing"
-        >
-          {{ importing ? t('admin.accounts.dataImporting') : t('admin.accounts.dataImportButton') }}
-        </button>
+        <div class="flex gap-3">
+          <button class="btn btn-secondary" type="button" :disabled="busy" @click="handleSearch">
+            {{ searching ? t('admin.accounts.dataSearching') : t('admin.accounts.dataSearchButton') }}
+          </button>
+          <button
+            class="btn btn-primary"
+            type="submit"
+            form="import-data-form"
+            :disabled="busy"
+          >
+            {{ importing ? t('admin.accounts.dataImporting') : t('admin.accounts.dataImportButton') }}
+          </button>
+        </div>
       </div>
     </template>
   </BaseDialog>
@@ -90,7 +127,7 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
-import type { AdminDataImportResult } from '@/types'
+import type { Account, AdminDataImportResult, AdminDataSearchResult } from '@/types'
 
 interface Props {
   show: boolean
@@ -99,6 +136,7 @@ interface Props {
 interface Emits {
   (e: 'close'): void
   (e: 'imported'): void
+  (e: 'searched', accounts: Account[]): void
 }
 
 const props = defineProps<Props>()
@@ -108,20 +146,25 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const importing = ref(false)
+const searching = ref(false)
 const file = ref<File | null>(null)
-const result = ref<AdminDataImportResult | null>(null)
+const importResult = ref<AdminDataImportResult | null>(null)
+const searchResult = ref<AdminDataSearchResult | null>(null)
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const fileName = computed(() => file.value?.name || '')
-
-const errorItems = computed(() => result.value?.errors || [])
+const busy = computed(() => importing.value || searching.value)
+const importErrors = computed(() => importResult.value?.errors || [])
+const searchAccounts = computed(() => searchResult.value?.accounts || [])
+const searchErrors = computed(() => searchResult.value?.errors || [])
 
 watch(
   () => props.show,
   (open) => {
     if (open) {
       file.value = null
-      result.value = null
+      importResult.value = null
+      searchResult.value = null
       if (fileInput.value) {
         fileInput.value.value = ''
       }
@@ -139,7 +182,7 @@ const handleFileChange = (event: Event) => {
 }
 
 const handleClose = () => {
-  if (importing.value) return
+  if (busy.value) return
   emit('close')
 }
 
@@ -161,6 +204,48 @@ const readFileAsText = async (sourceFile: File): Promise<string> => {
   })
 }
 
+const readPayload = async () => {
+  if (!file.value) {
+    throw new Error('file_required')
+  }
+  const text = await readFileAsText(file.value)
+  return JSON.parse(text)
+}
+
+const handleSearch = async () => {
+  if (!file.value) {
+    appStore.showError(t('admin.accounts.dataImportSelectFile'))
+    return
+  }
+
+  searching.value = true
+  try {
+    const dataPayload = await readPayload()
+    const res = await adminAPI.accounts.searchData({ data: dataPayload })
+    searchResult.value = res
+    emit('searched', res.accounts || [])
+
+    const msgParams: Record<string, unknown> = {
+      account_candidates: res.account_candidates,
+      account_matched: res.account_matched,
+      account_failed: res.account_failed,
+    }
+    if (res.account_failed > 0) {
+      appStore.showWarning(t('admin.accounts.dataSearchCompletedWithErrors', msgParams))
+    } else {
+      appStore.showSuccess(t('admin.accounts.dataSearchSuccess', msgParams))
+    }
+  } catch (error: any) {
+    if (error instanceof SyntaxError) {
+      appStore.showError(t('admin.accounts.dataImportParseFailed'))
+    } else {
+      appStore.showError(error?.message || t('admin.accounts.dataImportFailed'))
+    }
+  } finally {
+    searching.value = false
+  }
+}
+
 const handleImport = async () => {
   if (!file.value) {
     appStore.showError(t('admin.accounts.dataImportSelectFile'))
@@ -169,15 +254,14 @@ const handleImport = async () => {
 
   importing.value = true
   try {
-    const text = await readFileAsText(file.value)
-    const dataPayload = JSON.parse(text)
+    const dataPayload = await readPayload()
 
     const res = await adminAPI.accounts.importData({
       data: dataPayload,
       skip_default_group_bind: true
     })
 
-    result.value = res
+    importResult.value = res
 
     const msgParams: Record<string, unknown> = {
       account_created: res.account_created,
