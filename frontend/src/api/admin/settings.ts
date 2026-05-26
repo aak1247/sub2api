@@ -553,6 +553,9 @@ export interface SystemSettings {
   // Available Channels feature switch
   available_channels_enabled: boolean;
 
+  // Account expiry auto-pause feature switch
+  account_expiry_auto_pause_enabled: boolean;
+
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: boolean;
 
@@ -773,6 +776,9 @@ export interface UpdateSettingsRequest {
 
   // Available Channels feature switch
   available_channels_enabled?: boolean;
+
+  // Account expiry auto-pause feature switch
+  account_expiry_auto_pause_enabled?: boolean;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled?: boolean;

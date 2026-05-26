@@ -84,6 +84,7 @@ type DataSearchResult struct {
 	AccountMatched    int                      `json:"account_matched"`
 	AccountFailed     int                      `json:"account_failed"`
 	Accounts          []AccountWithConcurrency `json:"accounts,omitempty"`
+	Duplicates        []AccountDuplicateGroup  `json:"duplicates,omitempty"`
 	Errors            []DataImportError        `json:"errors,omitempty"`
 }
 
@@ -92,6 +93,12 @@ type DataImportError struct {
 	Name     string `json:"name,omitempty"`
 	ProxyKey string `json:"proxy_key,omitempty"`
 	Message  string `json:"message"`
+}
+
+type AccountDuplicateGroup struct {
+	Reason      string                   `json:"reason"`
+	IdentityKey string                   `json:"identity_key,omitempty"`
+	Accounts    []AccountWithConcurrency `json:"accounts"`
 }
 
 func buildProxyKey(protocol, host string, port int, username, password string) string {
@@ -225,10 +232,21 @@ func (h *AccountHandler) SearchData(c *gin.Context) {
 	response.Success(c, result)
 }
 
+func (h *AccountHandler) CheckDuplicates(c *gin.Context) {
+	result, err := h.checkDuplicates(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, result)
+}
+
 func (h *AccountHandler) searchData(ctx context.Context, req DataSearchRequest) (DataSearchResult, error) {
 	dataPayload := req.Data
 	result := DataSearchResult{}
 	candidateKeys := make(map[string]struct{}, len(dataPayload.Accounts))
+	candidateIdentityKeys := make(map[string]struct{}, len(dataPayload.Accounts))
 
 	for i := range dataPayload.Accounts {
 		item := dataPayload.Accounts[i]
@@ -242,10 +260,14 @@ func (h *AccountHandler) searchData(ctx context.Context, req DataSearchRequest) 
 			continue
 		}
 
+		enrichCredentialsFromIDToken(&item)
 		key := dataAccountSearchKey(item.Name, item.Platform, item.Type)
 		if _, ok := candidateKeys[key]; !ok {
 			candidateKeys[key] = struct{}{}
 			result.AccountCandidates++
+		}
+		if identityKey := dataAccountNameIdentityKey(item.Name); identityKey != "" {
+			candidateIdentityKeys[identityKey] = struct{}{}
 		}
 	}
 
@@ -261,7 +283,12 @@ func (h *AccountHandler) searchData(ctx context.Context, req DataSearchRequest) 
 	for i := range existingAccounts {
 		acc := existingAccounts[i]
 		key := dataAccountSearchKey(acc.Name, acc.Platform, acc.Type)
-		if _, ok := candidateKeys[key]; !ok {
+		_, nameMatched := candidateKeys[key]
+		identityMatched := false
+		if identityKey := dataAccountNameIdentityKey(acc.Name); identityKey != "" {
+			_, identityMatched = candidateIdentityKeys[identityKey]
+		}
+		if !nameMatched && !identityMatched {
 			continue
 		}
 		account := acc
@@ -272,8 +299,113 @@ func (h *AccountHandler) searchData(ctx context.Context, req DataSearchRequest) 
 	return result, nil
 }
 
+func (h *AccountHandler) checkDuplicates(ctx context.Context) (DataSearchResult, error) {
+	accounts, err := h.listAccountsFiltered(ctx, "", "", "", "", 0, "", "name", "asc")
+	if err != nil {
+		return DataSearchResult{}, err
+	}
+	return h.buildDuplicateResult(ctx, accounts), nil
+}
+
 func dataAccountSearchKey(name, platform, accountType string) string {
 	return strings.ToLower(strings.TrimSpace(name)) + "\x00" + strings.ToLower(strings.TrimSpace(platform)) + "\x00" + strings.ToLower(strings.TrimSpace(accountType))
+}
+
+type dataAccountIndex struct {
+	accountsByKey map[string]service.Account
+}
+
+func buildDataAccountIndex(accounts []service.Account) *dataAccountIndex {
+	index := &dataAccountIndex{accountsByKey: map[string]service.Account{}}
+	for _, account := range accounts {
+		index.Add(account)
+	}
+	return index
+}
+
+func (i *dataAccountIndex) Add(account service.Account) {
+	if i == nil {
+		return
+	}
+	if i.accountsByKey == nil {
+		i.accountsByKey = map[string]service.Account{}
+	}
+	key := dataAccountNameIdentityKey(account.Name)
+	if key != "" {
+		if _, exists := i.accountsByKey[key]; !exists {
+			i.accountsByKey[key] = account
+		}
+	}
+}
+
+func (i *dataAccountIndex) Find(keys []string) *service.Account {
+	if i == nil {
+		return nil
+	}
+	for _, key := range keys {
+		if account, ok := i.accountsByKey[key]; ok {
+			return &account
+		}
+	}
+	return nil
+}
+
+func dataAccountNameIdentityKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	return "name:" + name
+}
+
+func firstSeenDataAccountIdentity(seen map[string]int, key string) (int, bool) {
+	if key == "" {
+		return 0, false
+	}
+	index, ok := seen[key]
+	return index, ok
+}
+
+func markDataAccountIdentitySeen(seen map[string]int, key string, index int) {
+	if key != "" {
+		seen[key] = index
+	}
+}
+
+func (h *AccountHandler) buildDuplicateResult(ctx context.Context, accounts []service.Account) DataSearchResult {
+	result := DataSearchResult{AccountCandidates: len(accounts)}
+	groups := map[string][]service.Account{}
+	for _, account := range accounts {
+		if key := dataAccountNameIdentityKey(account.Name); key != "" {
+			groups[key] = append(groups[key], account)
+		}
+	}
+
+	seenAccountIDs := map[int64]struct{}{}
+	for key, group := range groups {
+		if len(group) < 2 {
+			continue
+		}
+		duplicateGroup := AccountDuplicateGroup{
+			Reason:   dataAccountDuplicateReason(key),
+			Accounts: make([]AccountWithConcurrency, 0, len(group)),
+		}
+		for i := range group {
+			account := group[i]
+			duplicateGroup.Accounts = append(duplicateGroup.Accounts, h.buildAccountResponseWithRuntime(ctx, &account))
+			seenAccountIDs[account.ID] = struct{}{}
+		}
+		result.Duplicates = append(result.Duplicates, duplicateGroup)
+	}
+	result.AccountMatched = len(seenAccountIDs)
+	return result
+}
+
+func dataAccountDuplicateReason(identityKey string) string {
+	if strings.HasPrefix(identityKey, "name:") {
+		return "name"
+	}
+	return "identity"
 }
 
 func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) (DataImportResult, error) {
@@ -357,6 +489,12 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 
 	// 收集需要异步设置隐私的 Antigravity OAuth 账号
 	var privacyAccounts []*service.Account
+	existingAccounts, err := h.listAccountsFiltered(ctx, "", "", "", "", 0, "", "name", "asc")
+	if err != nil {
+		return result, err
+	}
+	accountIndex := buildDataAccountIndex(existingAccounts)
+	seenImportIdentities := map[string]int{}
 
 	for i := range dataPayload.Accounts {
 		item := dataPayload.Accounts[i]
@@ -387,6 +525,26 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		}
 
 		enrichCredentialsFromIDToken(&item)
+		identityKey := dataAccountNameIdentityKey(item.Name)
+		if duplicateIndex, ok := firstSeenDataAccountIdentity(seenImportIdentities, identityKey); ok {
+			result.AccountFailed++
+			result.Errors = append(result.Errors, DataImportError{
+				Kind:    "account",
+				Name:    item.Name,
+				Message: fmt.Sprintf("duplicate account in import payload with item #%d", duplicateIndex),
+			})
+			continue
+		}
+		markDataAccountIdentitySeen(seenImportIdentities, identityKey, i+1)
+		if existing := accountIndex.Find([]string{identityKey}); existing != nil {
+			result.AccountFailed++
+			result.Errors = append(result.Errors, DataImportError{
+				Kind:    "account",
+				Name:    item.Name,
+				Message: fmt.Sprintf("duplicate account already exists: #%d %s", existing.ID, existing.Name),
+			})
+			continue
+		}
 
 		accountInput := &service.CreateAccountInput{
 			Name:                 item.Name,
@@ -419,6 +577,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		if created.Platform == service.PlatformAntigravity && created.Type == service.AccountTypeOAuth {
 			privacyAccounts = append(privacyAccounts, created)
 		}
+		accountIndex.Add(*created)
 		result.AccountCreated++
 	}
 
@@ -647,7 +806,7 @@ func validateDataAccount(item DataAccount) error {
 		return errors.New("account credentials is required")
 	}
 	switch item.Type {
-	case service.AccountTypeOAuth, service.AccountTypeSetupToken, service.AccountTypeAPIKey, service.AccountTypeUpstream:
+	case service.AccountTypeOAuth, service.AccountTypeSetupToken, service.AccountTypeAPIKey, service.AccountTypeUpstream, service.AccountTypeBedrock, service.AccountTypeServiceAccount:
 	default:
 		return fmt.Errorf("account type is invalid: %s", item.Type)
 	}

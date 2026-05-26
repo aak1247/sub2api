@@ -232,6 +232,7 @@ export interface PublicSettings {
   channel_monitor_enabled: boolean
   channel_monitor_default_interval_seconds: number
   available_channels_enabled: boolean
+  account_expiry_auto_pause_enabled: boolean
   affiliate_enabled: boolean
 }
 
@@ -1108,6 +1109,12 @@ export interface AdminDataImportError {
   message: string
 }
 
+export interface AdminAccountDuplicateGroup {
+  reason: string
+  identity_key?: string
+  accounts: Account[]
+}
+
 export interface AdminDataImportResult {
   proxy_created: number
   proxy_reused: number
@@ -1122,6 +1129,7 @@ export interface AdminDataSearchResult {
   account_matched: number
   account_failed: number
   accounts?: Account[]
+  duplicates?: AdminAccountDuplicateGroup[]
   errors?: AdminDataImportError[]
 }
 

@@ -68,6 +68,7 @@ type AdminService interface {
 
 	// Account management
 	ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]Account, int64, error)
+	ListAccountIDs(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]int64, error)
 	GetAccount(ctx context.Context, id int64) (*Account, error)
 	GetAccountsByIDs(ctx context.Context, ids []int64) ([]*Account, error)
 	CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error)
@@ -2335,6 +2336,14 @@ func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int,
 	return accounts, result.Total, nil
 }
 
+func (s *adminServiceImpl) ListAccountIDs(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]int64, error) {
+	ids, err := s.accountRepo.ListIDsWithFilters(ctx, platform, accountType, status, search, groupID, privacyMode)
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 func (s *adminServiceImpl) GetAccount(ctx context.Context, id int64) (*Account, error) {
 	return s.accountRepo.GetByID(ctx, id)
 }
@@ -2728,35 +2737,7 @@ func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filte
 		groupID = parsedGroupID
 	}
 
-	const pageSize = 500
-	page := 1
-	accountIDs := make([]int64, 0, pageSize)
-
-	for {
-		accounts, total, err := s.ListAccounts(
-			ctx,
-			page,
-			pageSize,
-			filters.Platform,
-			filters.Type,
-			filters.Status,
-			filters.Search,
-			groupID,
-			filters.PrivacyMode,
-			"",
-			"",
-		)
-		if err != nil {
-			return nil, err
-		}
-		for _, account := range accounts {
-			accountIDs = append(accountIDs, account.ID)
-		}
-		if int64(len(accountIDs)) >= total || len(accounts) == 0 {
-			return accountIDs, nil
-		}
-		page++
-	}
+	return s.ListAccountIDs(ctx, filters.Platform, filters.Type, filters.Status, filters.Search, groupID, filters.PrivacyMode)
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {

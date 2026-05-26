@@ -116,6 +116,30 @@ export async function listWithEtag(
   }
 }
 
+export interface AccountIDListResponse {
+  ids: number[]
+  total: number
+}
+
+export type AccountListFilters = {
+  platform?: string
+  type?: string
+  status?: string
+  group?: string
+  search?: string
+  privacy_mode?: string
+  lite?: string
+  sort_by?: string
+  sort_order?: 'asc' | 'desc'
+}
+
+export async function listIds(filters?: AccountListFilters): Promise<AccountIDListResponse> {
+  const { data } = await apiClient.get<AccountIDListResponse>('/admin/accounts/ids', {
+    params: filters
+  })
+  return data
+}
+
 /**
  * Get account by ID
  * @param id - Account ID
@@ -576,6 +600,11 @@ export async function searchData(payload: {
   return data
 }
 
+export async function checkDuplicates(): Promise<AdminDataSearchResult> {
+  const { data } = await apiClient.get<AdminDataSearchResult>('/admin/accounts/duplicates')
+  return data
+}
+
 export async function importCodexSession(payload: CodexSessionImportRequest): Promise<CodexSessionImportResult> {
   const { data } = await apiClient.post<CodexSessionImportResult>('/admin/accounts/import/codex-session', payload)
   return data
@@ -667,6 +696,7 @@ export async function setPrivacy(id: number): Promise<Account> {
 export const accountsAPI = {
   list,
   listWithEtag,
+  listIds,
   getById,
   create,
   update,
@@ -699,6 +729,7 @@ export const accountsAPI = {
   exportData,
   importData,
   searchData,
+  checkDuplicates,
   importCodexSession,
   getAntigravityDefaultModelMapping,
   batchClearError,

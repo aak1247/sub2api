@@ -42,8 +42,9 @@ import (
 //   - sql: 原生 SQL 执行器，用于复杂查询和批量操作
 //   - schedulerCache: 调度器缓存，用于在账号状态变更时同步快照
 type accountRepository struct {
-	client *dbent.Client // Ent ORM 客户端
-	sql    sqlExecutor   // 原生 SQL 执行接口
+	client      *dbent.Client // Ent ORM 客户端
+	sql         sqlExecutor   // 原生 SQL 执行接口
+	settingRepo service.SettingRepository
 	// schedulerCache 用于在账号状态变更时主动同步快照到缓存，
 	// 确保粘性会话能及时感知账号不可用状态。
 	// Used to proactively sync account snapshot to cache when status changes,
@@ -67,14 +68,21 @@ var schedulerNeutralExtraKeys = map[string]struct{}{
 
 // NewAccountRepository 创建账户仓储实例。
 // 这是对外暴露的构造函数，返回接口类型以便于依赖注入。
-func NewAccountRepository(client *dbent.Client, sqlDB *sql.DB, schedulerCache service.SchedulerCache) service.AccountRepository {
-	return newAccountRepositoryWithSQL(client, sqlDB, schedulerCache)
+func NewAccountRepository(client *dbent.Client, sqlDB *sql.DB, schedulerCache service.SchedulerCache, settingRepo service.SettingRepository) service.AccountRepository {
+	return newAccountRepositoryWithSQL(client, sqlDB, schedulerCache).withSettingRepository(settingRepo)
 }
 
 // newAccountRepositoryWithSQL 是内部构造函数，支持依赖注入 SQL 执行器。
 // 这种设计便于单元测试时注入 mock 对象。
 func newAccountRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor, schedulerCache service.SchedulerCache) *accountRepository {
 	return &accountRepository{client: client, sql: sqlq, schedulerCache: schedulerCache}
+}
+
+func (r *accountRepository) withSettingRepository(settingRepo service.SettingRepository) *accountRepository {
+	if r != nil {
+		r.settingRepo = settingRepo
+	}
+	return r
 }
 
 func (r *accountRepository) Create(ctx context.Context, account *service.Account) error {
@@ -461,7 +469,7 @@ func (r *accountRepository) List(ctx context.Context, params pagination.Paginati
 	return r.ListWithFilters(ctx, params, "", "", "", "", 0, "")
 }
 
-func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
+func (r *accountRepository) accountListQuery(platform, accountType, status, search string, groupID int64, privacyMode string) *dbent.AccountQuery {
 	q := r.client.Account.Query()
 
 	if platform != "" {
@@ -554,6 +562,12 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 		}))
 	}
 
+	return q
+}
+
+func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
+	q := r.accountListQuery(platform, accountType, status, search, groupID, privacyMode)
+
 	total, err := q.Count(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -576,6 +590,11 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 		return nil, nil, err
 	}
 	return outAccounts, paginationResultFromTotal(int64(total), params), nil
+}
+
+func (r *accountRepository) ListIDsWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]int64, error) {
+	q := r.accountListQuery(platform, accountType, status, search, groupID, privacyMode)
+	return q.Order(dbent.Asc(dbaccount.FieldID)).IDs(ctx)
 }
 
 func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selector) {
@@ -916,7 +935,7 @@ func (r *accountRepository) ListSchedulable(ctx context.Context) ([]service.Acco
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
 			tempUnschedulablePredicate(),
-			notExpiredPredicate(now),
+			r.notExpiredPredicate(ctx, now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
 			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
 		).
@@ -943,7 +962,7 @@ func (r *accountRepository) ListSchedulableByPlatform(ctx context.Context, platf
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
 			tempUnschedulablePredicate(),
-			notExpiredPredicate(now),
+			r.notExpiredPredicate(ctx, now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
 			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
 		).
@@ -977,7 +996,7 @@ func (r *accountRepository) ListSchedulableByPlatforms(ctx context.Context, plat
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
 			tempUnschedulablePredicate(),
-			notExpiredPredicate(now),
+			r.notExpiredPredicate(ctx, now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
 			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
 		).
@@ -998,7 +1017,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatform(ctx context.Conte
 			dbaccount.SchedulableEQ(true),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
 			tempUnschedulablePredicate(),
-			notExpiredPredicate(now),
+			r.notExpiredPredicate(ctx, now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
 			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
 		).
@@ -1022,7 +1041,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatforms(ctx context.Cont
 			dbaccount.SchedulableEQ(true),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
 			tempUnschedulablePredicate(),
-			notExpiredPredicate(now),
+			r.notExpiredPredicate(ctx, now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
 			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
 		).
@@ -1502,7 +1521,7 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 		preds = append(preds,
 			dbaccount.SchedulableEQ(true),
 			tempUnschedulablePredicate(),
-			notExpiredPredicate(now),
+			r.notExpiredPredicate(ctx, now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
 			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
 		)
@@ -1605,12 +1624,39 @@ func tempUnschedulablePredicate() dbpredicate.Account {
 	})
 }
 
+func (r *accountRepository) accountExpiryAutoPauseEnabled(ctx context.Context) bool {
+	if r == nil || r.settingRepo == nil {
+		return true
+	}
+	value, err := r.settingRepo.GetValue(ctx, service.SettingKeyAccountExpiryAutoPauseEnabled)
+	if err != nil {
+		return true
+	}
+	return !isFalseSetting(value)
+}
+
+func (r *accountRepository) notExpiredPredicate(ctx context.Context, now time.Time) dbpredicate.Account {
+	if !r.accountExpiryAutoPauseEnabled(ctx) {
+		return dbaccount.IDGT(0)
+	}
+	return notExpiredPredicate(now)
+}
+
 func notExpiredPredicate(now time.Time) dbpredicate.Account {
 	return dbaccount.Or(
 		dbaccount.ExpiresAtIsNil(),
 		dbaccount.ExpiresAtGT(now),
 		dbaccount.AutoPauseOnExpiredEQ(false),
 	)
+}
+
+func isFalseSetting(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "false", "0", "off", "disabled":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *accountRepository) loadProxies(ctx context.Context, proxyIDs []int64) (map[int64]*service.Proxy, error) {

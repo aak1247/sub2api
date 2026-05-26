@@ -23,6 +23,10 @@ type accountRepoStubForAdminList struct {
 	listWithFiltersAccounts []Account
 	listWithFiltersResult   *pagination.PaginationResult
 	listWithFiltersErr      error
+
+	listIDsWithFiltersCalls   int
+	listIDsWithFiltersGroupID int64
+	listIDsWithFiltersIDs     []int64
 }
 
 func (s *accountRepoStubForAdminList) ListWithFilters(_ context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
@@ -48,6 +52,17 @@ func (s *accountRepoStubForAdminList) ListWithFilters(_ context.Context, params 
 	}
 
 	return s.listWithFiltersAccounts, result, nil
+}
+
+func (s *accountRepoStubForAdminList) ListIDsWithFilters(_ context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]int64, error) {
+	s.listIDsWithFiltersCalls++
+	s.listWithFiltersPlatform = platform
+	s.listWithFiltersType = accountType
+	s.listWithFiltersStatus = status
+	s.listWithFiltersSearch = search
+	s.listWithFiltersPrivacy = privacyMode
+	s.listIDsWithFiltersGroupID = groupID
+	return s.listIDsWithFiltersIDs, s.listWithFiltersErr
 }
 
 type proxyRepoStubForAdminList struct {
@@ -198,6 +213,22 @@ func TestAdminService_ListAccounts_WithPrivacyMode(t *testing.T) {
 		require.Equal(t, []Account{{ID: 2, Name: "acc2"}}, accounts)
 		require.Equal(t, PrivacyModeCFBlocked, repo.listWithFiltersPrivacy)
 	})
+}
+
+func TestAdminService_ListAccountIDs_WithFilters(t *testing.T) {
+	repo := &accountRepoStubForAdminList{listIDsWithFiltersIDs: []int64{3, 5}}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	ids, err := svc.ListAccountIDs(context.Background(), PlatformOpenAI, AccountTypeOAuth, StatusActive, "acc", AccountListGroupUngrouped, PrivacyModeTrainingOff)
+	require.NoError(t, err)
+	require.Equal(t, []int64{3, 5}, ids)
+	require.Equal(t, 1, repo.listIDsWithFiltersCalls)
+	require.Equal(t, PlatformOpenAI, repo.listWithFiltersPlatform)
+	require.Equal(t, AccountTypeOAuth, repo.listWithFiltersType)
+	require.Equal(t, StatusActive, repo.listWithFiltersStatus)
+	require.Equal(t, "acc", repo.listWithFiltersSearch)
+	require.Equal(t, AccountListGroupUngrouped, repo.listIDsWithFiltersGroupID)
+	require.Equal(t, PrivacyModeTrainingOff, repo.listWithFiltersPrivacy)
 }
 
 func TestAdminService_ListProxies_WithSearch(t *testing.T) {

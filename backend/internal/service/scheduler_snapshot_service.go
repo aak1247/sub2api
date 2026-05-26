@@ -29,17 +29,18 @@ type batchSeenKey struct {
 }
 
 type SchedulerSnapshotService struct {
-	cache         SchedulerCache
-	outboxRepo    SchedulerOutboxRepository
-	accountRepo   AccountRepository
-	groupRepo     GroupRepository
-	cfg           *config.Config
-	stopCh        chan struct{}
-	stopOnce      sync.Once
-	wg            sync.WaitGroup
-	fallbackLimit *fallbackLimiter
-	lagMu         sync.Mutex
-	lagFailures   int
+	cache          SchedulerCache
+	outboxRepo     SchedulerOutboxRepository
+	accountRepo    AccountRepository
+	groupRepo      GroupRepository
+	settingService *SettingService
+	cfg            *config.Config
+	stopCh         chan struct{}
+	stopOnce       sync.Once
+	wg             sync.WaitGroup
+	fallbackLimit  *fallbackLimiter
+	lagMu          sync.Mutex
+	lagFailures    int
 }
 
 func NewSchedulerSnapshotService(
@@ -62,6 +63,13 @@ func NewSchedulerSnapshotService(
 		stopCh:        make(chan struct{}),
 		fallbackLimit: newFallbackLimiter(maxQPS),
 	}
+}
+
+func (s *SchedulerSnapshotService) SetSettingService(settingService *SettingService) {
+	if s == nil {
+		return
+	}
+	s.settingService = settingService
 }
 
 func (s *SchedulerSnapshotService) Start() {
@@ -109,7 +117,7 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 	mode := s.resolveMode(platform, hasForcePlatform)
 	bucket := s.bucketFor(groupID, platform, mode)
 
-	if s.cache != nil {
+	if s.cache != nil && s.accountExpiryAutoPauseEnabled(ctx) {
 		cached, hit, err := s.cache.GetSnapshot(ctx, bucket)
 		if err != nil {
 			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] cache read failed: bucket=%s err=%v", bucket.String(), err)
@@ -130,7 +138,7 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 		return nil, useMixed, err
 	}
 
-	if s.cache != nil {
+	if s.cache != nil && s.accountExpiryAutoPauseEnabled(ctx) {
 		if err := s.cache.SetSnapshot(fallbackCtx, bucket, accounts); err != nil {
 			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] cache write failed: bucket=%s err=%v", bucket.String(), err)
 		}
@@ -148,6 +156,9 @@ func (s *SchedulerSnapshotService) GetAccount(ctx context.Context, accountID int
 		if err != nil {
 			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] account cache read failed: id=%d err=%v", accountID, err)
 		} else if account != nil {
+			if !s.accountExpiryAutoPauseEnabled(ctx) {
+				account.AutoPauseOnExpired = false
+			}
 			return account, nil
 		}
 	}
@@ -158,6 +169,13 @@ func (s *SchedulerSnapshotService) GetAccount(ctx context.Context, accountID int
 	fallbackCtx, cancel := s.withFallbackTimeout(ctx)
 	defer cancel()
 	return s.accountRepo.GetByID(fallbackCtx, accountID)
+}
+
+func (s *SchedulerSnapshotService) accountExpiryAutoPauseEnabled(ctx context.Context) bool {
+	if s == nil || s.settingService == nil {
+		return true
+	}
+	return s.settingService.GetAccountExpiryAutoPauseEnabled(ctx)
 }
 
 // GetGroupByID 获取分组信息（供调度器使用）

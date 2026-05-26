@@ -179,6 +179,9 @@ type SystemSettings struct {
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
+	// Account expiry auto-pause feature
+	AccountExpiryAutoPauseEnabled bool `json:"account_expiry_auto_pause_enabled"`
+
 	// Claude Code version check
 	MinClaudeCodeVersion string
 	MaxClaudeCodeVersion string
@@ -282,6 +285,9 @@ type PublicSettings struct {
 
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+
+	// Account expiry auto-pause feature
+	AccountExpiryAutoPauseEnabled bool `json:"account_expiry_auto_pause_enabled"`
 
 	// Affiliate (邀请返利) feature toggle
 	AffiliateEnabled bool `json:"affiliate_enabled"`

@@ -112,6 +112,14 @@
                         {{ t('admin.accounts.selectedCount', { count: selIds.length }) }}
                       </span>
                     </button>
+                    <button class="account-tools-menu-item" :disabled="checkingDuplicates" @click="handleCheckDuplicates">
+                      <span class="account-tools-menu-icon bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300">
+                        <Icon name="search" size="sm" />
+                      </span>
+                      <span class="flex-1 text-left">
+                        {{ checkingDuplicates ? t('admin.accounts.duplicateChecking') : t('admin.accounts.duplicateCheck') }}
+                      </span>
+                    </button>
 
                     <div class="my-2 border-t border-gray-100 dark:border-gray-700"></div>
                     <div class="px-2 py-2">
@@ -170,10 +178,34 @@
             {{ t('admin.accounts.listPendingSyncAction') }}
           </button>
         </div>
+        <div
+          v-if="jsonDataFilterSummary"
+          class="mt-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800 dark:border-blue-700/40 dark:bg-blue-900/20 dark:text-blue-200"
+        >
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <span>{{ t('admin.accounts.dataSearchActiveFilter', jsonDataFilterSummary) }}</span>
+            <span class="text-blue-700 dark:text-blue-200">
+              {{ t('admin.accounts.dataSearchStatusSummary', jsonDataStatusSummary) }}
+            </span>
+          </div>
+          <button class="btn btn-secondary px-2 py-1 text-xs" @click="clearJsonDataFilter">
+            {{ t('admin.accounts.dataSearchClearFilter') }}
+          </button>
+          <button
+            v-if="duplicateLaterSelectable"
+            class="btn btn-secondary px-2 py-1 text-xs"
+            type="button"
+            @click="selectLaterDuplicateAccounts"
+          >
+            {{ t('admin.accounts.duplicateSelectLater') }}
+          </button>
+        </div>
       </template>
       <template #table>
         <AccountBulkActionsBar
           :selected-ids="selIds"
+          :total-count="pagination.total"
+          :select-filtered-loading="selectingAllFiltered"
           @delete="handleBulkDelete"
           @reset-status="handleBulkResetStatus"
           @refresh-token="handleBulkRefreshToken"
@@ -181,6 +213,7 @@
           @edit-filtered="openBulkEditFiltered"
           @clear="clearSelection"
           @select-page="selectPage"
+          @select-filtered="selectAllFilteredAccounts"
           @toggle-schedulable="handleBulkToggleSchedulable"
         />
         <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -416,7 +449,7 @@ import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRules
 import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfilesModal.vue'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
-import type { Account, AccountPlatform, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel } from '@/types'
+import type { Account, AccountPlatform, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel, AdminDataSearchResult, AdminAccountDuplicateGroup } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -478,6 +511,41 @@ const showDeleteDialog = ref(false)
 const showReAuth = ref(false)
 const showTest = ref(false)
 const showStats = ref(false)
+const selectingAllFiltered = ref(false)
+const jsonDataFilterSummary = ref<Pick<AdminDataSearchResult, 'account_candidates' | 'account_matched' | 'account_failed'> | null>(null)
+const duplicateGroups = ref<AdminAccountDuplicateGroup[]>([])
+const duplicateLaterSelectable = computed(() => duplicateGroups.value.some(group => (group.accounts?.length || 0) > 1))
+const jsonDataStatusSummary = computed(() => {
+  const now = Date.now()
+  const summary = {
+    active: 0,
+    rate_limited: 0,
+    error: 0,
+    inactive: 0,
+    temp_unschedulable: 0
+  }
+
+  for (const account of accounts.value) {
+    const rateLimitResetAt = account.rate_limit_reset_at ? new Date(account.rate_limit_reset_at).getTime() : Number.NaN
+    const isRateLimited = Number.isFinite(rateLimitResetAt) && rateLimitResetAt > now
+    const tempUnschedUntil = account.temp_unschedulable_until ? new Date(account.temp_unschedulable_until).getTime() : Number.NaN
+    const isTempUnschedulable = Number.isFinite(tempUnschedUntil) && tempUnschedUntil > now
+
+    if (account.status === 'active' && isTempUnschedulable) {
+      summary.temp_unschedulable++
+    } else if (account.status === 'active' && isRateLimited) {
+      summary.rate_limited++
+    } else if (account.status === 'error') {
+      summary.error++
+    } else if (account.status === 'inactive') {
+      summary.inactive++
+    } else if (account.status === 'active' && account.schedulable) {
+      summary.active++
+    }
+  }
+
+  return summary
+})
 const showErrorPassthrough = ref(false)
 const showTLSFingerprintProfiles = ref(false)
 const edAcc = ref<Account | null>(null)
@@ -492,6 +560,7 @@ const scheduleModelOptions = ref<SelectOption[]>([])
 const togglingSchedulable = ref<number | null>(null)
 const menu = reactive<{show:boolean, acc:Account|null, pos:{top:number, left:number}|null}>({ show: false, acc: null, pos: null })
 const exportingData = ref(false)
+const checkingDuplicates = ref(false)
 
 // Account tools dropdown
 const showAccountToolsDropdown = ref(false)
@@ -777,6 +846,8 @@ const isFirstLoad = ref(true)
 
 const load = async () => {
   const requestParams = params as any
+  jsonDataFilterSummary.value = null
+  duplicateGroups.value = []
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
@@ -792,6 +863,8 @@ const load = async () => {
 }
 
 const reload = async () => {
+  jsonDataFilterSummary.value = null
+  duplicateGroups.value = []
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
@@ -800,6 +873,8 @@ const reload = async () => {
 }
 
 const debouncedReload = () => {
+  jsonDataFilterSummary.value = null
+  duplicateGroups.value = []
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
@@ -807,6 +882,8 @@ const debouncedReload = () => {
 }
 
 const handlePageChange = (page: number) => {
+  jsonDataFilterSummary.value = null
+  duplicateGroups.value = []
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
@@ -814,6 +891,8 @@ const handlePageChange = (page: number) => {
 }
 
 const handlePageSizeChange = (size: number) => {
+  jsonDataFilterSummary.value = null
+  duplicateGroups.value = []
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
@@ -821,6 +900,8 @@ const handlePageSizeChange = (size: number) => {
 }
 
 const handleSort = (key: string, order: AccountSortOrder) => {
+  jsonDataFilterSummary.value = null
+  duplicateGroups.value = []
   sortState.sort_by = key
   sortState.sort_order = order
   const requestParams = params as any
@@ -924,6 +1005,7 @@ const mergeAccountsIncrementally = (nextRows: Account[]) => {
 }
 
 const refreshAccountsIncrementally = async () => {
+  if (jsonDataFilterSummary.value) return
   if (autoRefreshFetching.value) return
   autoRefreshFetching.value = true
   try {
@@ -963,6 +1045,11 @@ const refreshAccountsIncrementally = async () => {
 }
 
 const handleManualRefresh = async () => {
+  if (jsonDataFilterSummary.value) {
+    await refreshTodayStatsBatch()
+    usageManualRefreshToken.value += 1
+    return
+  }
   await load()
   // Force usage cells to refetch /usage on explicit user refresh.
   usageManualRefreshToken.value += 1
@@ -985,6 +1072,68 @@ const openImportData = () => {
 const openExportDataDialogFromMenu = () => {
   closeAccountToolsDropdown()
   openExportDataDialog()
+}
+
+const handleCheckDuplicates = async () => {
+  closeAccountToolsDropdown()
+  checkingDuplicates.value = true
+  try {
+    const result = await adminAPI.accounts.checkDuplicates()
+    const duplicateAccounts = new Map<number, Account>()
+    for (const group of result.duplicates || []) {
+      for (const account of group.accounts || []) {
+        duplicateAccounts.set(account.id, account)
+      }
+    }
+
+    accounts.value = Array.from(duplicateAccounts.values())
+    pagination.page = 1
+    pagination.total = accounts.value.length
+    pagination.pages = accounts.value.length > 0 ? 1 : 0
+    jsonDataFilterSummary.value = {
+      account_candidates: result.account_candidates,
+      account_matched: result.account_matched,
+      account_failed: result.duplicates?.length || 0
+    }
+    duplicateGroups.value = result.duplicates || []
+    clearSelection()
+    resetAutoRefreshCache()
+
+    if (duplicateAccounts.size > 0) {
+      appStore.showWarning(t('admin.accounts.duplicateCheckFound', {
+        count: duplicateAccounts.size,
+        groups: result.duplicates?.length || 0
+      }))
+    } else {
+      appStore.showSuccess(t('admin.accounts.duplicateCheckNone'))
+    }
+  } catch (error: any) {
+    appStore.showError(error?.message || t('admin.accounts.duplicateCheckFailed'))
+  } finally {
+    checkingDuplicates.value = false
+  }
+}
+
+const accountCreatedAtTime = (account: Account) => {
+  const value = account.created_at ? new Date(account.created_at).getTime() : Number.NaN
+  return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER
+}
+
+const selectLaterDuplicateAccounts = () => {
+  const selected = new Set<number>()
+  for (const group of duplicateGroups.value) {
+    const sorted = [...(group.accounts || [])].sort((a, b) => {
+      const createdDiff = accountCreatedAtTime(a) - accountCreatedAtTime(b)
+      if (createdDiff !== 0) return createdDiff
+      return a.id - b.id
+    })
+    for (const account of sorted.slice(1)) {
+      selected.add(account.id)
+    }
+  }
+
+  setSelectedIds(Array.from(selected))
+  appStore.showSuccess(t('admin.accounts.duplicateSelectedLater', { count: selected.size }))
 }
 
 const openErrorPassthrough = () => {
@@ -1207,6 +1356,27 @@ const toggleSelectAllVisible = (event: Event) => {
   const target = event.target as HTMLInputElement
   toggleVisible(target.checked)
 }
+const selectAllFilteredAccounts = async () => {
+  if (selectingAllFiltered.value) return
+  selectingAllFiltered.value = true
+  try {
+    if (jsonDataFilterSummary.value) {
+      const ids = accounts.value.map(account => account.id)
+      setSelectedIds(ids)
+      appStore.showSuccess(t('admin.accounts.bulkActions.selectAllFilteredSuccess', { count: ids.length }))
+      return
+    }
+
+    const result = await adminAPI.accounts.listIds(buildAccountQueryFilters())
+    setSelectedIds(result.ids)
+    appStore.showSuccess(t('admin.accounts.bulkActions.selectAllFilteredSuccess', { count: result.total }))
+  } catch (error: any) {
+    console.error('Failed to select filtered accounts:', error)
+    appStore.showError(error?.message || t('admin.accounts.bulkActions.selectAllFilteredFailed'))
+  } finally {
+    selectingAllFiltered.value = false
+  }
+}
 const handleBulkDelete = async () => { if(!confirm(t('common.confirm'))) return; try { await Promise.all(selIds.value.map(id => adminAPI.accounts.delete(id))); clearSelection(); reload() } catch (error) { console.error('Failed to bulk delete accounts:', error) } }
 const handleBulkResetStatus = async () => {
   if (!confirm(t('common.confirm'))) return
@@ -1394,12 +1564,28 @@ const handleBulkUpdated = () => {
   reload()
 }
 const handleDataImported = () => { showImportData.value = false; reload() }
-const handleDataSearched = (matchedAccounts: Account[]) => {
+const handleDataSearched = (matchedAccounts: Account[], result: AdminDataSearchResult) => {
   accounts.value = matchedAccounts
   pagination.page = 1
   pagination.total = matchedAccounts.length
   pagination.pages = matchedAccounts.length > 0 ? 1 : 0
+  jsonDataFilterSummary.value = {
+    account_candidates: result.account_candidates,
+    account_matched: result.account_matched,
+    account_failed: result.account_failed
+  }
+  duplicateGroups.value = result.duplicates || []
+  showImportData.value = false
   clearSelection()
+  resetAutoRefreshCache()
+  refreshTodayStatsBatch().catch((error) => {
+    console.error('Failed to refresh account today stats after JSON data search:', error)
+  })
+}
+const clearJsonDataFilter = async () => {
+  jsonDataFilterSummary.value = null
+  duplicateGroups.value = []
+  await reload()
 }
 const ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE = 'ungrouped'
 const ACCOUNT_PRIVACY_MODE_UNSET_QUERY_VALUE = '__unset__'

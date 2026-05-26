@@ -51,6 +51,28 @@
           {{ t('admin.accounts.dataSearchResultSummary', searchResult) }}
         </div>
 
+        <div v-if="duplicateGroups.length" class="mt-2">
+          <div class="text-sm font-medium text-amber-700 dark:text-amber-300">
+            {{ t('admin.accounts.duplicateAccountGroups') }}
+          </div>
+          <div class="mt-2 max-h-56 space-y-2 overflow-auto rounded-lg bg-gray-50 p-3 text-xs dark:bg-dark-800">
+            <div
+              v-for="(group, idx) in duplicateGroups"
+              :key="group.identity_key || idx"
+              class="rounded-md border border-amber-200 bg-amber-50 p-2 dark:border-amber-800 dark:bg-amber-900/20"
+            >
+              <div class="font-medium text-amber-800 dark:text-amber-200">
+                {{ t('admin.accounts.duplicateAccountReason', { reason: group.reason, count: group.accounts.length }) }}
+              </div>
+              <div class="mt-1 space-y-0.5 text-gray-700 dark:text-dark-200">
+                <div v-for="account in group.accounts" :key="account.id">
+                  #{{ account.id }} · {{ account.name }} · {{ account.platform }} · {{ account.type }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div v-if="searchAccounts.length" class="mt-2">
           <div class="text-sm font-medium text-gray-700 dark:text-dark-200">
             {{ t('admin.accounts.dataSearchAccounts') }}
@@ -136,7 +158,7 @@ interface Props {
 interface Emits {
   (e: 'close'): void
   (e: 'imported'): void
-  (e: 'searched', accounts: Account[]): void
+  (e: 'searched', accounts: Account[], result: AdminDataSearchResult): void
 }
 
 const props = defineProps<Props>()
@@ -157,6 +179,7 @@ const busy = computed(() => importing.value || searching.value)
 const importErrors = computed(() => importResult.value?.errors || [])
 const searchAccounts = computed(() => searchResult.value?.accounts || [])
 const searchErrors = computed(() => searchResult.value?.errors || [])
+const duplicateGroups = computed(() => searchResult.value?.duplicates || [])
 
 watch(
   () => props.show,
@@ -223,14 +246,15 @@ const handleSearch = async () => {
     const dataPayload = await readPayload()
     const res = await adminAPI.accounts.searchData({ data: dataPayload })
     searchResult.value = res
-    emit('searched', res.accounts || [])
+    emit('searched', res.accounts || [], res)
 
     const msgParams: Record<string, unknown> = {
       account_candidates: res.account_candidates,
       account_matched: res.account_matched,
       account_failed: res.account_failed,
+      duplicate_groups: res.duplicates?.length || 0,
     }
-    if (res.account_failed > 0) {
+    if (res.account_failed > 0 || (res.duplicates?.length || 0) > 0) {
       appStore.showWarning(t('admin.accounts.dataSearchCompletedWithErrors', msgParams))
     } else {
       appStore.showSuccess(t('admin.accounts.dataSearchSuccess', msgParams))

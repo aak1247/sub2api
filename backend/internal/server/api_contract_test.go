@@ -1635,6 +1635,10 @@ func (s *stubAccountRepo) ListWithFilters(ctx context.Context, params pagination
 	return nil, nil, errors.New("not implemented")
 }
 
+func (s *stubAccountRepo) ListIDsWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]int64, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (s *stubAccountRepo) ListByGroup(ctx context.Context, groupID int64) ([]service.Account, error) {
 	return nil, errors.New("not implemented")
 }

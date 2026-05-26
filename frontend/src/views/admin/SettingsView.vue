@@ -5079,6 +5079,30 @@
         <div class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.settings.features.accountExpiryAutoPause.title') }}
+            </h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {{ t('admin.settings.features.accountExpiryAutoPause.description') }}
+            </p>
+          </div>
+          <div class="space-y-5 p-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t('admin.settings.features.accountExpiryAutoPause.enabled') }}
+                </label>
+                <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.features.accountExpiryAutoPause.enabledHint') }}
+                </p>
+              </div>
+              <Toggle v-model="form.account_expiry_auto_pause_enabled" />
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.features.riskControl.title') }}
             </h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
@@ -6837,6 +6861,7 @@ type SettingsForm = Omit<
   token_refresh_scheduled_enabled: boolean;
   token_refresh_scheduled_min_interval_minutes: number;
   token_refresh_scheduled_max_interval_minutes: number;
+  account_expiry_auto_pause_enabled: boolean;
 };
 
 const form = reactive<SettingsForm>({
@@ -7044,6 +7069,8 @@ const form = reactive<SettingsForm>({
   channel_monitor_default_interval_seconds: 60,
   // Available Channels feature switch
   available_channels_enabled: false,
+  // Account expiry auto-pause feature switch
+  account_expiry_auto_pause_enabled: true,
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: false,
 });
@@ -8185,6 +8212,8 @@ async function saveSettings() {
         Number(form.channel_monitor_default_interval_seconds) || 60,
       // Available Channels feature switch
       available_channels_enabled: form.available_channels_enabled,
+      // Account expiry auto-pause feature switch
+      account_expiry_auto_pause_enabled: form.account_expiry_auto_pause_enabled,
       // Affiliate (邀请返利) feature switch
       affiliate_enabled: form.affiliate_enabled,
     };

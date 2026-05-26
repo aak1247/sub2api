@@ -7,20 +7,29 @@
       <span v-else class="text-sm font-medium text-primary-900 dark:text-primary-100">
         {{ t('admin.accounts.bulkEdit.title') }}
       </span>
-      <template v-if="selectedIds.length > 0">
-      <button
-        @click="$emit('select-page')"
-        class="text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200"
-      >
-        {{ t('admin.accounts.bulkActions.selectCurrentPage') }}
-      </button>
-      <span class="text-gray-300 dark:text-primary-800">•</span>
-      <button
-        @click="$emit('clear')"
-        class="text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200"
-      >
-        {{ t('admin.accounts.bulkActions.clear') }}
-      </button>
+      <template v-if="totalCount > 0">
+        <button
+          @click="$emit('select-page')"
+          class="text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200"
+        >
+          {{ t('admin.accounts.bulkActions.selectCurrentPage') }}
+        </button>
+        <span class="text-gray-300 dark:text-primary-800">•</span>
+        <button
+          @click="$emit('select-filtered')"
+          :disabled="selectFilteredLoading || totalCount === 0"
+          class="text-xs font-medium text-primary-700 hover:text-primary-800 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-300 dark:hover:text-primary-200"
+        >
+          {{ selectFilteredLoading ? t('admin.accounts.bulkActions.selectingFiltered') : t('admin.accounts.bulkActions.selectAllFiltered', { count: totalCount }) }}
+        </button>
+        <span v-if="selectedIds.length > 0" class="text-gray-300 dark:text-primary-800">•</span>
+        <button
+          @click="$emit('clear')"
+          v-if="selectedIds.length > 0"
+          class="text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200"
+        >
+          {{ t('admin.accounts.bulkActions.clear') }}
+        </button>
       </template>
     </div>
     <div class="flex gap-2">
@@ -41,5 +50,17 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-defineProps(['selectedIds']); defineEmits(['delete', 'edit-selected', 'edit-filtered', 'clear', 'select-page', 'toggle-schedulable', 'reset-status', 'refresh-token']); const { t } = useI18n()
+
+withDefaults(defineProps<{
+  selectedIds: number[]
+  totalCount?: number
+  selectFilteredLoading?: boolean
+}>(), {
+  totalCount: 0,
+  selectFilteredLoading: false
+})
+
+defineEmits(['delete', 'edit-selected', 'edit-filtered', 'clear', 'select-page', 'select-filtered', 'toggle-schedulable', 'reset-status', 'refresh-token'])
+
+const { t } = useI18n()
 </script>

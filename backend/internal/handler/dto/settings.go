@@ -241,6 +241,9 @@ type SystemSettings struct {
 	// Available Channels feature switch (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
+	// Account expiry auto-pause feature switch
+	AccountExpiryAutoPauseEnabled bool `json:"account_expiry_auto_pause_enabled"`
+
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
 
@@ -309,6 +312,8 @@ type PublicSettings struct {
 	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
 
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+
+	AccountExpiryAutoPauseEnabled bool `json:"account_expiry_auto_pause_enabled"`
 
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 

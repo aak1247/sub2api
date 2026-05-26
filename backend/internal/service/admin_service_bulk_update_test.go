@@ -31,6 +31,8 @@ type accountRepoStubForBulkUpdate struct {
 	listResult       *pagination.PaginationResult
 	listErr          error
 	listCalled       bool
+	listIDsData      []int64
+	listIDsCalled    bool
 	lastListParams   pagination.PaginationParams
 	lastListFilters  struct {
 		platform    string
@@ -104,6 +106,20 @@ func (s *accountRepoStubForBulkUpdate) ListWithFilters(_ context.Context, params
 		return s.listData, s.listResult, nil
 	}
 	return s.listData, &pagination.PaginationResult{Total: int64(len(s.listData))}, nil
+}
+
+func (s *accountRepoStubForBulkUpdate) ListIDsWithFilters(_ context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]int64, error) {
+	s.listIDsCalled = true
+	s.lastListFilters.platform = platform
+	s.lastListFilters.accountType = accountType
+	s.lastListFilters.status = status
+	s.lastListFilters.search = search
+	s.lastListFilters.groupID = groupID
+	s.lastListFilters.privacyMode = privacyMode
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return append([]int64{}, s.listIDsData...), nil
 }
 
 // TestAdminService_BulkUpdateAccounts_AllSuccessIDs 验证批量更新成功时返回 success_ids/failed_ids。
@@ -206,11 +222,7 @@ func TestAdminService_BulkUpdateAccounts_MixedChannelPreCheckBlocksOnExistingCon
 
 func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {
 	repo := &accountRepoStubForBulkUpdate{
-		listData: []Account{
-			{ID: 7},
-			{ID: 11},
-		},
-		listResult: &pagination.PaginationResult{Total: 2},
+		listIDsData: []int64{7, 11},
 	}
 	svc := &adminServiceImpl{accountRepo: repo}
 
@@ -234,7 +246,8 @@ func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {
 
 	result, err := svc.BulkUpdateAccounts(context.Background(), input)
 	require.NoError(t, err)
-	require.True(t, repo.listCalled, "expected filter-target bulk update to resolve matching IDs via account list filters")
+	require.True(t, repo.listIDsCalled, "expected filter-target bulk update to resolve matching IDs via account ID filters")
+	require.False(t, repo.listCalled, "filter-target bulk update should not load full account rows")
 	require.Equal(t, PlatformOpenAI, repo.lastListFilters.platform)
 	require.Equal(t, AccountTypeOAuth, repo.lastListFilters.accountType)
 	require.Equal(t, StatusActive, repo.lastListFilters.status)

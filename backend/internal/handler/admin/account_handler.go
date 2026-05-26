@@ -176,7 +176,38 @@ type AccountWithConcurrency struct {
 	CurrentRPM        *int     `json:"current_rpm,omitempty"`         // 当前分钟 RPM 计数
 }
 
+type AccountIDsResponse struct {
+	IDs   []int64 `json:"ids"`
+	Total int     `json:"total"`
+}
+
 const accountListGroupUngroupedQueryValue = "ungrouped"
+
+func parseAccountListFilters(c *gin.Context) (platform, accountType, status, search string, groupID int64, privacyMode string, ok bool) {
+	platform = c.Query("platform")
+	accountType = c.Query("type")
+	status = c.Query("status")
+	search = strings.TrimSpace(c.Query("search"))
+	if len(search) > 100 {
+		search = search[:100]
+	}
+	privacyMode = strings.TrimSpace(c.Query("privacy_mode"))
+
+	if groupIDStr := c.Query("group"); groupIDStr != "" {
+		if groupIDStr == accountListGroupUngroupedQueryValue {
+			groupID = service.AccountListGroupUngrouped
+		} else {
+			parsedGroupID, parseErr := strconv.ParseInt(groupIDStr, 10, 64)
+			if parseErr != nil || parsedGroupID < 0 {
+				response.ErrorFrom(c, infraerrors.BadRequest("INVALID_GROUP_FILTER", "invalid group filter"))
+				return "", "", "", "", 0, "", false
+			}
+			groupID = parsedGroupID
+		}
+	}
+
+	return platform, accountType, status, search, groupID, privacyMode, true
+}
 
 func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, account *service.Account) AccountWithConcurrency {
 	item := AccountWithConcurrency{
@@ -226,37 +257,13 @@ func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, ac
 // GET /api/v1/admin/accounts
 func (h *AccountHandler) List(c *gin.Context) {
 	page, pageSize := response.ParsePagination(c)
-	platform := c.Query("platform")
-	accountType := c.Query("type")
-	status := c.Query("status")
-	search := c.Query("search")
-	privacyMode := strings.TrimSpace(c.Query("privacy_mode"))
+	platform, accountType, status, search, groupID, privacyMode, ok := parseAccountListFilters(c)
+	if !ok {
+		return
+	}
 	sortBy := c.DefaultQuery("sort_by", "name")
 	sortOrder := c.DefaultQuery("sort_order", "asc")
-	// 标准化和验证 search 参数
-	search = strings.TrimSpace(search)
-	if len(search) > 100 {
-		search = search[:100]
-	}
 	lite := parseBoolQueryWithDefault(c.Query("lite"), false)
-
-	var groupID int64
-	if groupIDStr := c.Query("group"); groupIDStr != "" {
-		if groupIDStr == accountListGroupUngroupedQueryValue {
-			groupID = service.AccountListGroupUngrouped
-		} else {
-			parsedGroupID, parseErr := strconv.ParseInt(groupIDStr, 10, 64)
-			if parseErr != nil {
-				response.ErrorFrom(c, infraerrors.BadRequest("INVALID_GROUP_FILTER", "invalid group filter"))
-				return
-			}
-			if parsedGroupID < 0 {
-				response.ErrorFrom(c, infraerrors.BadRequest("INVALID_GROUP_FILTER", "invalid group filter"))
-				return
-			}
-			groupID = parsedGroupID
-		}
-	}
 
 	accounts, total, err := h.adminService.ListAccounts(c.Request.Context(), page, pageSize, platform, accountType, status, search, groupID, privacyMode, sortBy, sortOrder)
 	if err != nil {
@@ -391,6 +398,23 @@ func (h *AccountHandler) List(c *gin.Context) {
 	}
 
 	response.Paginated(c, result, total, page, pageSize)
+}
+
+// ListIDs handles listing all account IDs matched by current filters.
+// GET /api/v1/admin/accounts/ids
+func (h *AccountHandler) ListIDs(c *gin.Context) {
+	platform, accountType, status, search, groupID, privacyMode, ok := parseAccountListFilters(c)
+	if !ok {
+		return
+	}
+
+	ids, err := h.adminService.ListAccountIDs(c.Request.Context(), platform, accountType, status, search, groupID, privacyMode)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, AccountIDsResponse{IDs: ids, Total: len(ids)})
 }
 
 func buildAccountsListETag(

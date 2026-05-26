@@ -146,8 +146,9 @@ func ProvideUsageCleanupService(repo UsageCleanupRepository, timingWheel *Timing
 }
 
 // ProvideAccountExpiryService creates and starts AccountExpiryService.
-func ProvideAccountExpiryService(accountRepo AccountRepository) *AccountExpiryService {
+func ProvideAccountExpiryService(accountRepo AccountRepository, settingService *SettingService) *AccountExpiryService {
 	svc := NewAccountExpiryService(accountRepo, time.Minute)
+	svc.SetSettingService(settingService)
 	svc.Start()
 	return svc
 }
@@ -203,9 +204,11 @@ func ProvideSchedulerSnapshotService(
 	outboxRepo SchedulerOutboxRepository,
 	accountRepo AccountRepository,
 	groupRepo GroupRepository,
+	settingService *SettingService,
 	cfg *config.Config,
 ) *SchedulerSnapshotService {
 	svc := NewSchedulerSnapshotService(cache, outboxRepo, accountRepo, groupRepo, cfg)
+	svc.SetSettingService(settingService)
 	svc.Start()
 	return svc
 }

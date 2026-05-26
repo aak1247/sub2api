@@ -44,6 +44,15 @@ type stubAdminService struct {
 		sortOrder   string
 		calls       int
 	}
+	lastListAccountIDs struct {
+		platform    string
+		accountType string
+		status      string
+		search      string
+		groupID     int64
+		privacyMode string
+		calls       int
+	}
 	lastListUsers struct {
 		page      int
 		pageSize  int
@@ -310,6 +319,21 @@ func (s *stubAdminService) ListAccounts(ctx context.Context, page, pageSize int,
 	s.lastListAccounts.sortOrder = sortOrder
 	s.lastListAccounts.calls++
 	return s.accounts, int64(len(s.accounts)), nil
+}
+
+func (s *stubAdminService) ListAccountIDs(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]int64, error) {
+	s.lastListAccountIDs.platform = platform
+	s.lastListAccountIDs.accountType = accountType
+	s.lastListAccountIDs.status = status
+	s.lastListAccountIDs.search = search
+	s.lastListAccountIDs.groupID = groupID
+	s.lastListAccountIDs.privacyMode = privacyMode
+	s.lastListAccountIDs.calls++
+	ids := make([]int64, 0, len(s.accounts))
+	for _, account := range s.accounts {
+		ids = append(ids, account.ID)
+	}
+	return ids, nil
 }
 
 func (s *stubAdminService) GetAccount(ctx context.Context, id int64) (*service.Account, error) {
