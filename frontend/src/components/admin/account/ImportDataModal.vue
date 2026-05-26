@@ -116,6 +116,22 @@
               {{ item.kind }} {{ item.name || item.proxy_key || '-' }} — {{ item.message }}
             </div>
           </div>
+          <div
+            v-if="canOverwriteImport"
+            class="mt-3 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-800 dark:bg-amber-900/20"
+          >
+            <div class="text-xs text-amber-700 dark:text-amber-300">
+              {{ t('admin.accounts.dataImportOverwriteHint') }}
+            </div>
+            <button
+              class="btn btn-primary shrink-0"
+              type="button"
+              :disabled="busy"
+              @click="handleOverwriteImport"
+            >
+              {{ importing ? t('admin.accounts.dataImporting') : t('admin.accounts.dataImportOverwriteButton') }}
+            </button>
+          </div>
         </div>
       </div>
     </form>
@@ -180,6 +196,9 @@ const importErrors = computed(() => importResult.value?.errors || [])
 const searchAccounts = computed(() => searchResult.value?.accounts || [])
 const searchErrors = computed(() => searchResult.value?.errors || [])
 const duplicateGroups = computed(() => searchResult.value?.duplicates || [])
+const canOverwriteImport = computed(() => importErrors.value.some((item) => (
+  item.kind === 'account' && item.message.includes('duplicate account already exists')
+)))
 
 watch(
   () => props.show,
@@ -270,7 +289,7 @@ const handleSearch = async () => {
   }
 }
 
-const handleImport = async () => {
+const runImport = async (updateExisting: boolean) => {
   if (!file.value) {
     appStore.showError(t('admin.accounts.dataImportSelectFile'))
     return
@@ -282,13 +301,15 @@ const handleImport = async () => {
 
     const res = await adminAPI.accounts.importData({
       data: dataPayload,
-      skip_default_group_bind: true
+      skip_default_group_bind: true,
+      update_existing: updateExisting
     })
 
     importResult.value = res
 
     const msgParams: Record<string, unknown> = {
       account_created: res.account_created,
+      account_updated: res.account_updated || 0,
       account_failed: res.account_failed,
       proxy_created: res.proxy_created,
       proxy_reused: res.proxy_reused,
@@ -309,5 +330,13 @@ const handleImport = async () => {
   } finally {
     importing.value = false
   }
+}
+
+const handleImport = async () => {
+  await runImport(false)
+}
+
+const handleOverwriteImport = async () => {
+  await runImport(true)
 }
 </script>

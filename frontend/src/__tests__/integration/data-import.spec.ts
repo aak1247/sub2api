@@ -31,9 +31,7 @@ vi.mock('vue-i18n', () => ({
 
 describe('ImportDataModal', () => {
   beforeEach(() => {
-    showError.mockReset()
-    showSuccess.mockReset()
-    showWarning.mockReset()
+    vi.resetAllMocks()
   })
 
   it('未选择文件时提示错误', async () => {
@@ -129,5 +127,76 @@ describe('ImportDataModal', () => {
     expect(searchMock).toHaveBeenCalled()
     expect(showSuccess).toHaveBeenCalledWith('admin.accounts.dataSearchSuccess')
     expect(showError).not.toHaveBeenCalledWith('admin.accounts.dataImportParseFailed')
+  })
+
+  it('重复账号错误结果显示覆盖导入按钮并带 update_existing 重试', async () => {
+    const { adminAPI } = await import('@/api/admin')
+    const importMock = adminAPI.accounts.importData as ReturnType<typeof vi.fn>
+    importMock
+      .mockResolvedValueOnce({
+        proxy_created: 0,
+        proxy_reused: 0,
+        proxy_failed: 0,
+        account_created: 0,
+        account_updated: 0,
+        account_failed: 1,
+        errors: [
+          {
+            kind: 'account',
+            name: 'existing',
+            message: 'duplicate account already exists: #101 existing'
+          }
+        ]
+      })
+      .mockResolvedValueOnce({
+        proxy_created: 0,
+        proxy_reused: 0,
+        proxy_failed: 0,
+        account_created: 0,
+        account_updated: 1,
+        account_failed: 0,
+        errors: []
+      })
+
+    const payload = { type: 'sub2api-data', version: 1, proxies: [], accounts: [] }
+    const wrapper = mount(ImportDataModal, {
+      props: { show: true },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
+        }
+      }
+    })
+
+    const input = wrapper.find('input[type="file"]')
+    const file = new File([JSON.stringify(payload)], 'data.json', { type: 'application/json' })
+    Object.defineProperty(file, 'text', {
+      value: () => Promise.resolve(JSON.stringify(payload))
+    })
+    Object.defineProperty(input.element, 'files', {
+      value: [file]
+    })
+
+    await input.trigger('change')
+    await wrapper.find('form').trigger('submit')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const overwriteButton = wrapper.findAll('button').find((button) => button.text() === 'admin.accounts.dataImportOverwriteButton')
+    expect(overwriteButton).toBeTruthy()
+    expect(importMock).toHaveBeenCalledWith({
+      data: payload,
+      skip_default_group_bind: true,
+      update_existing: false
+    })
+
+    await overwriteButton!.trigger('click')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(importMock).toHaveBeenLastCalledWith({
+      data: payload,
+      skip_default_group_bind: true,
+      update_existing: true
+    })
+    expect(showSuccess).toHaveBeenCalledWith('admin.accounts.dataImportSuccess')
   })
 })

@@ -64,6 +64,7 @@ type DataAccount struct {
 type DataImportRequest struct {
 	Data                 DataPayload `json:"data"`
 	SkipDefaultGroupBind *bool       `json:"skip_default_group_bind"`
+	UpdateExisting       *bool       `json:"update_existing"`
 }
 
 type DataSearchRequest struct {
@@ -75,6 +76,7 @@ type DataImportResult struct {
 	ProxyReused    int               `json:"proxy_reused"`
 	ProxyFailed    int               `json:"proxy_failed"`
 	AccountCreated int               `json:"account_created"`
+	AccountUpdated int               `json:"account_updated"`
 	AccountFailed  int               `json:"account_failed"`
 	Errors         []DataImportError `json:"errors,omitempty"`
 }
@@ -413,6 +415,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 	if req.SkipDefaultGroupBind != nil {
 		skipDefaultGroupBind = *req.SkipDefaultGroupBind
 	}
+	updateExisting := req.UpdateExisting != nil && *req.UpdateExisting
 
 	dataPayload := req.Data
 	result := DataImportResult{}
@@ -537,6 +540,35 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		}
 		markDataAccountIdentitySeen(seenImportIdentities, identityKey, i+1)
 		if existing := accountIndex.Find([]string{identityKey}); existing != nil {
+			if updateExisting {
+				updated, updateErr := h.updateExistingDataAccount(ctx, *existing, item, proxyID)
+				if updateErr != nil {
+					result.AccountFailed++
+					result.Errors = append(result.Errors, DataImportError{
+						Kind:    "account",
+						Name:    item.Name,
+						Message: updateErr.Error(),
+					})
+					continue
+				}
+				if updated != nil {
+					accountIndex.Add(*updated)
+					if len(item.Credentials) > 0 {
+						h.scheduleOpenAIResponsesProbe(updated)
+					}
+					if h.tokenCacheInvalidator != nil && updated.IsOAuth() {
+						if invalidateErr := h.tokenCacheInvalidator.InvalidateToken(ctx, updated); invalidateErr != nil {
+							slog.Warn("import_data_invalidate_token_failed", "account_id", updated.ID, "error", invalidateErr)
+						}
+					}
+					if updated.Platform == service.PlatformAntigravity && updated.Type == service.AccountTypeOAuth {
+						privacyAccounts = append(privacyAccounts, updated)
+					}
+				}
+				result.AccountUpdated++
+				continue
+			}
+
 			result.AccountFailed++
 			result.Errors = append(result.Errors, DataImportError{
 				Kind:    "account",
@@ -599,6 +631,38 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 	}
 
 	return result, nil
+}
+
+func (h *AccountHandler) updateExistingDataAccount(ctx context.Context, existing service.Account, item DataAccount, proxyID *int64) (*service.Account, error) {
+	if !strings.EqualFold(strings.TrimSpace(existing.Platform), strings.TrimSpace(item.Platform)) {
+		return nil, fmt.Errorf("cannot overwrite account #%d %s: platform mismatch (%s != %s)", existing.ID, existing.Name, existing.Platform, item.Platform)
+	}
+
+	concurrency := item.Concurrency
+	priority := item.Priority
+	updateInput := &service.UpdateAccountInput{
+		Name:               item.Name,
+		Notes:              item.Notes,
+		Type:               item.Type,
+		Credentials:        item.Credentials,
+		Extra:              item.Extra,
+		Concurrency:        &concurrency,
+		Priority:           &priority,
+		RateMultiplier:     item.RateMultiplier,
+		ExpiresAt:          item.ExpiresAt,
+		AutoPauseOnExpired: item.AutoPauseOnExpired,
+	}
+
+	if item.ProxyKey != nil {
+		if proxyID != nil {
+			updateInput.ProxyID = proxyID
+		} else {
+			clearProxyID := int64(0)
+			updateInput.ProxyID = &clearProxyID
+		}
+	}
+
+	return h.adminService.UpdateAccount(ctx, existing.ID, updateInput)
 }
 
 func (h *AccountHandler) listAllProxies(ctx context.Context) ([]service.Proxy, error) {
