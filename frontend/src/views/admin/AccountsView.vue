@@ -521,6 +521,7 @@ const jsonDataStatusSummary = computed(() => {
     active: 0,
     rate_limited: 0,
     error: 0,
+    refreshed: 0,
     inactive: 0,
     temp_unschedulable: 0
   }
@@ -537,6 +538,8 @@ const jsonDataStatusSummary = computed(() => {
       summary.rate_limited++
     } else if (account.status === 'error') {
       summary.error++
+    } else if (account.status === 'refreshed') {
+      summary.refreshed++
     } else if (account.status === 'inactive') {
       summary.inactive++
     } else if (account.status === 'active' && account.schedulable) {

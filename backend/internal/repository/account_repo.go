@@ -653,7 +653,7 @@ func (r *accountRepository) ListByGroup(ctx context.Context, groupID int64) ([]s
 
 func (r *accountRepository) ListActive(ctx context.Context) ([]service.Account, error) {
 	accounts, err := r.client.Account.Query().
-		Where(dbaccount.StatusEQ(service.StatusActive)).
+		Where(dbaccount.StatusIn(service.StatusActive, service.StatusRefreshed)).
 		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
 	if err != nil {
@@ -747,12 +747,28 @@ func (r *accountRepository) SetError(ctx context.Context, id int64, errorMsg str
 	return nil
 }
 
+func (r *accountRepository) SetRefreshed(ctx context.Context, id int64, errorMsg string) error {
+	_, err := r.client.Account.Update().
+		Where(dbaccount.IDEQ(id)).
+		SetStatus(service.StatusRefreshed).
+		SetErrorMessage(errorMsg).
+		Save(ctx)
+	if err != nil {
+		return err
+	}
+	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue set refreshed failed: account=%d err=%v", id, err)
+	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
+	return nil
+}
+
 // syncSchedulerAccountSnapshot 在账号状态变更时主动同步快照到调度器缓存。
-// 当账号被设置为错误、禁用、不可调度或临时不可调度时调用，
+// 当账号被设置为错误、刷新失败、禁用、不可调度或临时不可调度时调用，
 // 确保调度器和粘性会话逻辑能及时感知账号的最新状态，避免继续使用不可用账号。
 //
 // syncSchedulerAccountSnapshot proactively syncs account snapshot to scheduler cache
-// when account status changes. Called when account is set to error, disabled,
+// when account status changes. Called when account is set to error, refreshed, disabled,
 // unschedulable, or temporarily unschedulable, ensuring scheduler and sticky session
 // logic can promptly detect the latest account state and avoid using unavailable accounts.
 func (r *accountRepository) syncSchedulerAccountSnapshot(ctx context.Context, accountID int64) {
@@ -1484,7 +1500,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue bulk update failed: err=%v", err)
 		}
 		shouldSync := false
-		if updates.Status != nil && (*updates.Status == service.StatusError || *updates.Status == service.StatusDisabled) {
+		if updates.Status != nil && (*updates.Status == service.StatusError || *updates.Status == service.StatusRefreshed || *updates.Status == service.StatusDisabled) {
 			shouldSync = true
 		}
 		if updates.Schedulable != nil && !*updates.Schedulable {

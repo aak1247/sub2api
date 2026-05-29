@@ -16,6 +16,7 @@ import type {
   TempUnschedulableStatus,
   AdminDataPayload,
   AdminDataImportResult,
+  AdminDataDuplicateAccountMode,
   AdminDataSearchResult,
   CodexSessionImportRequest,
   CodexSessionImportResult,
@@ -584,11 +585,13 @@ export async function importData(payload: {
   data: AdminDataPayload
   skip_default_group_bind?: boolean
   update_existing?: boolean
+  duplicate_account_mode?: AdminDataDuplicateAccountMode
 }): Promise<AdminDataImportResult> {
   const { data } = await apiClient.post<AdminDataImportResult>('/admin/accounts/data', {
     data: payload.data,
     skip_default_group_bind: payload.skip_default_group_bind,
-    update_existing: payload.update_existing
+    update_existing: payload.update_existing,
+    duplicate_account_mode: payload.duplicate_account_mode
   })
   return data
 }

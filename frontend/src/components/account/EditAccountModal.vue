@@ -2570,7 +2570,7 @@ const form = reactive({
   load_factor: null as number | null,
   priority: 1,
   rate_multiplier: 1,
-  status: 'active' as 'active' | 'inactive' | 'error',
+  status: 'active' as 'active' | 'inactive' | 'error' | 'refreshed',
   group_ids: [] as number[],
   expires_at: null as number | null
 })
@@ -2582,6 +2582,9 @@ const statusOptions = computed(() => {
   ]
   if (form.status === 'error') {
     options.push({ value: 'error', label: t('admin.accounts.status.error') })
+  }
+  if (form.status === 'refreshed') {
+    options.push({ value: 'refreshed', label: t('admin.accounts.status.refreshed') })
   }
   return options
 })
@@ -2637,7 +2640,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
   form.rate_multiplier = newAccount.rate_multiplier ?? 1
-  form.status = (newAccount.status === 'active' || newAccount.status === 'inactive' || newAccount.status === 'error')
+  form.status = (newAccount.status === 'active' || newAccount.status === 'inactive' || newAccount.status === 'error' || newAccount.status === 'refreshed')
     ? newAccount.status
     : 'active'
   form.group_ids = newAccount.group_ids || []
@@ -3352,7 +3355,7 @@ const handleSubmit = async () => {
   if (!props.account) return
   const accountID = props.account.id
 
-  if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
+  if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error' && form.status !== 'refreshed') {
     appStore.showError(t('admin.accounts.pleaseSelectStatus'))
     return
   }

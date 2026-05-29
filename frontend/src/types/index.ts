@@ -814,7 +814,7 @@ export interface Account {
   current_concurrency?: number // Real-time concurrency count from Redis
   priority: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
-  status: 'active' | 'inactive' | 'error'
+  status: 'active' | 'inactive' | 'error' | 'refreshed'
   error_message: string | null
   last_used_at: string | null
   expires_at: number | null
@@ -1022,7 +1022,7 @@ export interface UpdateAccountRequest {
   priority?: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
   schedulable?: boolean
-  status?: 'active' | 'inactive' | 'error'
+  status?: 'active' | 'inactive' | 'error' | 'refreshed'
   group_ids?: number[]
   expires_at?: number | null
   auto_pause_on_expired?: boolean
@@ -1075,6 +1075,8 @@ export interface AdminDataPayload {
   proxies: AdminDataProxy[]
   accounts: AdminDataAccount[]
 }
+
+export type AdminDataDuplicateAccountMode = 'skip' | 'overwrite' | 'coexist'
 
 export interface AdminDataProxy {
   proxy_key: string

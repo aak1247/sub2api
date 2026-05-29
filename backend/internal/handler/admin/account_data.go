@@ -18,10 +18,13 @@ import (
 )
 
 const (
-	dataType       = "sub2api-data"
-	legacyDataType = "sub2api-bundle"
-	dataVersion    = 1
-	dataPageCap    = 1000
+	dataType                          = "sub2api-data"
+	legacyDataType                    = "sub2api-bundle"
+	dataVersion                       = 1
+	dataPageCap                       = 1000
+	dataDuplicateAccountModeSkip      = "skip"
+	dataDuplicateAccountModeOverwrite = "overwrite"
+	dataDuplicateAccountModeCoexist   = "coexist"
 )
 
 type DataPayload struct {
@@ -65,6 +68,7 @@ type DataImportRequest struct {
 	Data                 DataPayload `json:"data"`
 	SkipDefaultGroupBind *bool       `json:"skip_default_group_bind"`
 	UpdateExisting       *bool       `json:"update_existing"`
+	DuplicateAccountMode string      `json:"duplicate_account_mode"`
 }
 
 type DataSearchRequest struct {
@@ -204,6 +208,10 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 	}
 
 	if err := validateDataHeader(req.Data); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	if _, err := resolveDataDuplicateAccountMode(req); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
@@ -410,12 +418,33 @@ func dataAccountDuplicateReason(identityKey string) string {
 	return "identity"
 }
 
+func resolveDataDuplicateAccountMode(req DataImportRequest) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(req.DuplicateAccountMode))
+	if mode == "" {
+		if req.UpdateExisting != nil && *req.UpdateExisting {
+			return dataDuplicateAccountModeOverwrite, nil
+		}
+		return dataDuplicateAccountModeSkip, nil
+	}
+	switch mode {
+	case dataDuplicateAccountModeSkip, dataDuplicateAccountModeOverwrite, dataDuplicateAccountModeCoexist:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("duplicate_account_mode is invalid: %s", req.DuplicateAccountMode)
+	}
+}
+
 func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) (DataImportResult, error) {
 	skipDefaultGroupBind := true
 	if req.SkipDefaultGroupBind != nil {
 		skipDefaultGroupBind = *req.SkipDefaultGroupBind
 	}
-	updateExisting := req.UpdateExisting != nil && *req.UpdateExisting
+	duplicateAccountMode, err := resolveDataDuplicateAccountMode(req)
+	if err != nil {
+		return DataImportResult{}, err
+	}
+	updateExisting := duplicateAccountMode == dataDuplicateAccountModeOverwrite
+	allowDuplicateAccounts := duplicateAccountMode == dataDuplicateAccountModeCoexist
 
 	dataPayload := req.Data
 	result := DataImportResult{}
@@ -529,17 +558,19 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 
 		enrichCredentialsFromIDToken(&item)
 		identityKey := dataAccountNameIdentityKey(item.Name)
-		if duplicateIndex, ok := firstSeenDataAccountIdentity(seenImportIdentities, identityKey); ok {
-			result.AccountFailed++
-			result.Errors = append(result.Errors, DataImportError{
-				Kind:    "account",
-				Name:    item.Name,
-				Message: fmt.Sprintf("duplicate account in import payload with item #%d", duplicateIndex),
-			})
-			continue
+		if !allowDuplicateAccounts {
+			if duplicateIndex, ok := firstSeenDataAccountIdentity(seenImportIdentities, identityKey); ok {
+				result.AccountFailed++
+				result.Errors = append(result.Errors, DataImportError{
+					Kind:    "account",
+					Name:    item.Name,
+					Message: fmt.Sprintf("duplicate account in import payload with item #%d", duplicateIndex),
+				})
+				continue
+			}
 		}
 		markDataAccountIdentitySeen(seenImportIdentities, identityKey, i+1)
-		if existing := accountIndex.Find([]string{identityKey}); existing != nil {
+		if existing := accountIndex.Find([]string{identityKey}); existing != nil && !allowDuplicateAccounts {
 			if updateExisting {
 				updated, updateErr := h.updateExistingDataAccount(ctx, *existing, item, proxyID)
 				if updateErr != nil {
@@ -609,7 +640,9 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		if created.Platform == service.PlatformAntigravity && created.Type == service.AccountTypeOAuth {
 			privacyAccounts = append(privacyAccounts, created)
 		}
-		accountIndex.Add(*created)
+		if !allowDuplicateAccounts {
+			accountIndex.Add(*created)
+		}
 		result.AccountCreated++
 	}
 

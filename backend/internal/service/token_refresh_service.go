@@ -42,6 +42,10 @@ type TokenRefreshService struct {
 	wg       sync.WaitGroup
 }
 
+type accountRefreshedSetter interface {
+	SetRefreshed(ctx context.Context, id int64, errorMsg string) error
+}
+
 // NewTokenRefreshService 创建token刷新服务
 func NewTokenRefreshService(
 	accountRepo AccountRepository,
@@ -410,12 +414,13 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 			return nil
 		}
 
-		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
+		// 不可重试错误（invalid_grant/invalid_client 等）直接标记刷新失败状态并返回
 		if isNonRetryableRefreshError(err) {
-			errorMsg := fmt.Sprintf("Token refresh failed (non-retryable): %v", err)
-			if setErr := s.accountRepo.SetError(ctx, account.ID, errorMsg); setErr != nil {
-				slog.Error("token_refresh.set_error_status_failed",
+			errorMsg := fmt.Sprintf("Token refresh failed for account %q (non-retryable): %v", account.Name, err)
+			if setErr := s.setAccountRefreshed(ctx, account, errorMsg); setErr != nil {
+				slog.Error("token_refresh.set_refreshed_status_failed",
 					"account_id", account.ID,
+					"account_name", account.Name,
 					"error", setErr,
 				)
 			}
@@ -471,8 +476,34 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 	return lastErr
 }
 
+func (s *TokenRefreshService) setAccountRefreshed(ctx context.Context, account *Account, errorMsg string) error {
+	if setter, ok := s.accountRepo.(accountRefreshedSetter); ok {
+		return setter.SetRefreshed(ctx, account.ID, errorMsg)
+	}
+	updated, err := s.accountRepo.GetByID(ctx, account.ID)
+	if err != nil {
+		return err
+	}
+	updated.Status = StatusRefreshed
+	updated.ErrorMessage = errorMsg
+	return s.accountRepo.Update(ctx, updated)
+}
+
 // postRefreshActions 刷新成功后的后续动作（清除错误状态、缓存失效、调度器同步等）
 func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *Account) {
+	if account.Status == StatusRefreshed {
+		if clearErr := s.accountRepo.ClearError(ctx, account.ID); clearErr != nil {
+			slog.Warn("token_refresh.clear_refreshed_status_failed",
+				"account_id", account.ID,
+				"account_name", account.Name,
+				"error", clearErr,
+			)
+		} else {
+			account.Status = StatusActive
+			account.ErrorMessage = ""
+			slog.Info("token_refresh.cleared_refreshed_status", "account_id", account.ID, "account_name", account.Name)
+		}
+	}
 	// Antigravity 账户：如果之前是因为缺少 project_id 而标记为 error，现在成功获取到了，清除错误状态
 	if account.Platform == PlatformAntigravity &&
 		account.Status == StatusError &&
@@ -483,6 +514,8 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 				"error", clearErr,
 			)
 		} else {
+			account.Status = StatusActive
+			account.ErrorMessage = ""
 			slog.Info("token_refresh.cleared_missing_project_id_error", "account_id", account.ID)
 		}
 	}

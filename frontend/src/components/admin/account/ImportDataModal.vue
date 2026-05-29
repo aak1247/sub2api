@@ -118,19 +118,29 @@
           </div>
           <div
             v-if="canOverwriteImport"
-            class="mt-3 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-800 dark:bg-amber-900/20"
+            class="mt-3 flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-800 dark:bg-amber-900/20 sm:flex-row sm:items-center sm:justify-between"
           >
             <div class="text-xs text-amber-700 dark:text-amber-300">
-              {{ t('admin.accounts.dataImportOverwriteHint') }}
+              {{ t('admin.accounts.dataImportDuplicateHint') }}
             </div>
-            <button
-              class="btn btn-primary shrink-0"
-              type="button"
-              :disabled="busy"
-              @click="handleOverwriteImport"
-            >
-              {{ importing ? t('admin.accounts.dataImporting') : t('admin.accounts.dataImportOverwriteButton') }}
-            </button>
+            <div class="flex flex-wrap justify-end gap-2">
+              <button
+                class="btn btn-secondary shrink-0"
+                type="button"
+                :disabled="busy"
+                @click="handleCoexistImport"
+              >
+                {{ importing ? t('admin.accounts.dataImporting') : t('admin.accounts.dataImportCoexistButton') }}
+              </button>
+              <button
+                class="btn btn-primary shrink-0"
+                type="button"
+                :disabled="busy"
+                @click="handleOverwriteImport"
+              >
+                {{ importing ? t('admin.accounts.dataImporting') : t('admin.accounts.dataImportOverwriteButton') }}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -165,7 +175,7 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
-import type { Account, AdminDataImportResult, AdminDataSearchResult } from '@/types'
+import type { Account, AdminDataDuplicateAccountMode, AdminDataImportResult, AdminDataSearchResult } from '@/types'
 
 interface Props {
   show: boolean
@@ -289,7 +299,7 @@ const handleSearch = async () => {
   }
 }
 
-const runImport = async (updateExisting: boolean) => {
+const runImport = async (duplicateAccountMode: AdminDataDuplicateAccountMode) => {
   if (!file.value) {
     appStore.showError(t('admin.accounts.dataImportSelectFile'))
     return
@@ -302,7 +312,8 @@ const runImport = async (updateExisting: boolean) => {
     const res = await adminAPI.accounts.importData({
       data: dataPayload,
       skip_default_group_bind: true,
-      update_existing: updateExisting
+      update_existing: duplicateAccountMode === 'overwrite',
+      duplicate_account_mode: duplicateAccountMode
     })
 
     importResult.value = res
@@ -333,10 +344,14 @@ const runImport = async (updateExisting: boolean) => {
 }
 
 const handleImport = async () => {
-  await runImport(false)
+  await runImport('skip')
 }
 
 const handleOverwriteImport = async () => {
-  await runImport(true)
+  await runImport('overwrite')
+}
+
+const handleCoexistImport = async () => {
+  await runImport('coexist')
 }
 </script>

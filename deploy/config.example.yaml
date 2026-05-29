@@ -778,9 +778,9 @@ database:
   # Max open connections (高并发场景建议 256+，需配合 PostgreSQL max_connections 调整)
   # 最大打开连接数
   max_open_conns: 256
-  # Max idle connections (建议为 max_open_conns 的 50%，减少频繁建连开销)
+  # Max idle connections (建议按常态并发调优；过高会长期占用 PostgreSQL 空闲连接)
   # 最大空闲连接数
-  max_idle_conns: 128
+  max_idle_conns: 10
   # Connection max lifetime (minutes)
   # 连接最大存活时间（分钟）
   conn_max_lifetime_minutes: 30

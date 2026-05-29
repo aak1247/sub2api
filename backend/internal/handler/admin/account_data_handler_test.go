@@ -469,6 +469,90 @@ func TestImportDataOverwriteExistingAccount(t *testing.T) {
 	require.Equal(t, 70, *adminSvc.updatedAccounts[0].Priority)
 }
 
+func TestImportDataCoexistDuplicateAccounts(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+	adminSvc.accounts = []service.Account{
+		{
+			ID:          101,
+			Name:        "existing",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeAPIKey,
+			Credentials: map[string]any{"api_key": "sk-existing"},
+			Status:      service.StatusActive,
+		},
+	}
+
+	dataPayload := map[string]any{
+		"data": map[string]any{
+			"type":    dataType,
+			"version": dataVersion,
+			"proxies": []map[string]any{},
+			"accounts": []map[string]any{
+				{
+					"name":        "existing",
+					"platform":    service.PlatformOpenAI,
+					"type":        service.AccountTypeAPIKey,
+					"credentials": map[string]any{"api_key": "sk-imported-1"},
+					"concurrency": 3,
+					"priority":    50,
+				},
+				{
+					"name":        "existing",
+					"platform":    service.PlatformOpenAI,
+					"type":        service.AccountTypeAPIKey,
+					"credentials": map[string]any{"api_key": "sk-imported-2"},
+					"concurrency": 4,
+					"priority":    60,
+				},
+			},
+		},
+		"skip_default_group_bind": true,
+		"duplicate_account_mode":  "coexist",
+	}
+
+	body, _ := json.Marshal(dataPayload)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Code int              `json:"code"`
+		Data DataImportResult `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Equal(t, 2, resp.Data.AccountCreated)
+	require.Equal(t, 0, resp.Data.AccountUpdated)
+	require.Equal(t, 0, resp.Data.AccountFailed)
+	require.Len(t, adminSvc.createdAccounts, 2)
+	require.Equal(t, "existing", adminSvc.createdAccounts[0].Name)
+	require.Equal(t, "existing", adminSvc.createdAccounts[1].Name)
+	require.Empty(t, adminSvc.updatedAccounts)
+}
+
+func TestImportDataRejectsInvalidDuplicateAccountMode(t *testing.T) {
+	router, _ := setupAccountDataRouter()
+	dataPayload := map[string]any{
+		"data": map[string]any{
+			"type":     dataType,
+			"version":  dataVersion,
+			"proxies":  []map[string]any{},
+			"accounts": []map[string]any{},
+		},
+		"duplicate_account_mode": "replace",
+	}
+
+	body, _ := json.Marshal(dataPayload)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "duplicate_account_mode is invalid")
+}
+
 func TestSearchDataFindsExistingAccountsWithoutImporting(t *testing.T) {
 	router, adminSvc := setupAccountDataRouter()
 	adminSvc.accounts = []service.Account{
