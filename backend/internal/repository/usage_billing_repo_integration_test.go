@@ -80,6 +80,103 @@ func TestUsageBillingRepositoryApply_DeduplicatesBalanceBilling(t *testing.T) {
 	require.Equal(t, 1, dedupCount)
 }
 
+func TestUsageBillingRepositoryApplyRedis_DirtyWriteback(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	rdb := testRedis(t)
+	repo := newUsageBillingRepository(integrationDB, rdb, false)
+
+	user := mustCreateUser(t, client, &service.User{
+		Email:        fmt.Sprintf("usage-billing-redis-user-%d@example.com", time.Now().UnixNano()),
+		PasswordHash: "hash",
+		Balance:      100,
+	})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{
+		UserID: user.ID,
+		Key:    "sk-usage-billing-redis-" + uuid.NewString(),
+		Name:   "billing-redis",
+		Quota:  1,
+	})
+	account := mustCreateAccount(t, client, &service.Account{
+		Name: "usage-billing-redis-account-" + uuid.NewString(),
+		Type: service.AccountTypeAPIKey,
+		Extra: map[string]any{
+			"quota_limit": 1.0,
+		},
+	})
+
+	require.NoError(t, rdb.Set(ctx, billingBalanceKey(user.ID), 100, time.Hour).Err())
+	require.NoError(t, rdb.HSet(ctx, usageBillingAPIKeyQuotaCacheKey(apiKey.ID), map[string]any{
+		"quota_used": 0,
+		"quota":      1,
+	}).Err())
+	require.NoError(t, rdb.HSet(ctx, billingRateLimitKey(apiKey.ID), map[string]any{
+		rateLimitFieldUsage5h:  0,
+		rateLimitFieldUsage1d:  0,
+		rateLimitFieldUsage7d:  0,
+		rateLimitFieldWindow5h: time.Now().Unix(),
+		rateLimitFieldWindow1d: time.Now().Unix(),
+		rateLimitFieldWindow7d: time.Now().Unix(),
+	}).Err())
+
+	cmd := &service.UsageBillingCommand{
+		RequestID:           uuid.NewString(),
+		APIKeyID:            apiKey.ID,
+		UserID:              user.ID,
+		AccountID:           account.ID,
+		AccountType:         service.AccountTypeAPIKey,
+		BalanceCost:         1.25,
+		APIKeyQuotaCost:     1.25,
+		APIKeyQuota:         apiKey.Quota,
+		APIKeyQuotaUsed:     apiKey.QuotaUsed,
+		APIKeyRateLimitCost: 1.25,
+		AccountQuotaCost:    1.25,
+	}
+	result1, err := repo.Apply(ctx, cmd)
+	require.NoError(t, err)
+	require.True(t, result1.Applied)
+	require.True(t, result1.APIKeyQuotaExhausted)
+	require.NotNil(t, result1.NewBalance)
+	require.InDelta(t, 98.75, *result1.NewBalance, 0.000001)
+
+	result2, err := repo.Apply(ctx, cmd)
+	require.NoError(t, err)
+	require.False(t, result2.Applied)
+
+	var dbBalance float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = $1", user.ID).Scan(&dbBalance))
+	require.InDelta(t, 100, dbBalance, 0.000001, "Apply should not synchronously update DB")
+
+	require.NoError(t, repo.FlushDirty(ctx))
+
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT balance FROM users WHERE id = $1", user.ID).Scan(&dbBalance))
+	require.InDelta(t, 98.75, dbBalance, 0.000001)
+
+	var quotaUsed float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT quota_used FROM api_keys WHERE id = $1", apiKey.ID).Scan(&quotaUsed))
+	require.InDelta(t, 1.25, quotaUsed, 0.000001)
+
+	var status string
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT status FROM api_keys WHERE id = $1", apiKey.ID).Scan(&status))
+	require.Equal(t, service.StatusAPIKeyQuotaExhausted, status)
+
+	var usage5h float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT usage_5h FROM api_keys WHERE id = $1", apiKey.ID).Scan(&usage5h))
+	require.InDelta(t, 1.25, usage5h, 0.000001)
+
+	var accountQuotaUsed float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT COALESCE((extra->>'quota_used')::numeric, 0) FROM accounts WHERE id = $1", account.ID).Scan(&accountQuotaUsed))
+	require.InDelta(t, 1.25, accountQuotaUsed, 0.000001)
+
+	var outboxCount int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM scheduler_outbox
+		WHERE event_type = $1 AND account_id = $2
+	`, service.SchedulerOutboxEventAccountChanged, account.ID).Scan(&outboxCount))
+	require.Equal(t, 1, outboxCount)
+}
+
 func TestUsageBillingRepositoryApply_DeduplicatesSubscriptionBilling(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)

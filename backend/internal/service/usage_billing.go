@@ -21,6 +21,7 @@ type UsageBillingCommand struct {
 
 	UserID              int64
 	AccountID           int64
+	GroupID             *int64
 	SubscriptionID      *int64
 	AccountType         string
 	Model               string
@@ -37,6 +38,8 @@ type UsageBillingCommand struct {
 	BalanceCost         float64
 	SubscriptionCost    float64
 	APIKeyQuotaCost     float64
+	APIKeyQuota         float64
+	APIKeyQuotaUsed     float64
 	APIKeyRateLimitCost float64
 	AccountQuotaCost    float64
 }
@@ -56,10 +59,11 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		return ""
 	}
 	raw := fmt.Sprintf(
-		"%d|%d|%d|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%d|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f",
+		"%d|%d|%d|%d|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%d|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f",
 		c.UserID,
 		c.AccountID,
 		c.APIKeyID,
+		valueOrZero(c.GroupID),
 		strings.TrimSpace(c.AccountType),
 		strings.TrimSpace(c.Model),
 		strings.TrimSpace(c.ServiceTier),
@@ -114,6 +118,7 @@ type AccountQuotaState struct {
 type UsageBillingApplyResult struct {
 	Applied              bool
 	APIKeyQuotaExhausted bool
+	CacheUpdated         bool
 	NewBalance           *float64           // post-deduction balance (nil = no balance deduction)
 	QuotaState           *AccountQuotaState // post-increment quota state (nil = no quota increment)
 }
