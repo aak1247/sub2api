@@ -5227,13 +5227,9 @@ export default {
           enabledHint: 'When off, the admin sidebar entry is hidden and gateway moderation is skipped.',
         },
         tokenRefresh: {
-          title: 'Scheduled Token Refresh',
-          description: 'Refresh OAuth account tokens on a randomized per-account schedule. The background checker runs every 3 minutes and refreshes accounts whose random time has arrived.',
-          enabled: 'Enable Scheduled Token Refresh',
-          enabledHint: 'When enabled, each account gets its next refresh time randomly selected from the interval below.',
-          minInterval: 'Minimum interval (minutes)',
-          maxInterval: 'Maximum interval (minutes)',
-          intervalHint: 'The maximum interval must be greater than or equal to the minimum interval. Changes take effect at runtime without restart.',
+          title: 'Automatic Token Refresh',
+          description: 'OAuth account tokens refresh automatically at a random time within the hour before expiry.',
+          policy: 'Current fixed policy: the background checker schedules each token refresh randomly within 1 hour before expiry, with a final safety refresh in the last few minutes.',
         },
         affiliate: {
           title: 'Affiliate (Invite Rebate)',

@@ -5390,13 +5390,9 @@ export default {
           enabledHint: '关闭后管理员侧边栏入口隐藏，网关内容审计不会执行。',
         },
         tokenRefresh: {
-          title: '定时刷新 Token',
-          description: '按账号随机时间定时刷新 OAuth token。后台每 3 分钟检查一次，到达账号随机刷新时间后执行刷新。',
-          enabled: '启用定时刷新 Token',
-          enabledHint: '启用后，每个账号会在下面的最小/最大间隔之间随机生成下一次刷新时间。',
-          minInterval: '最小间隔（分钟）',
-          maxInterval: '最大间隔（分钟）',
-          intervalHint: '最大间隔必须大于或等于最小间隔。修改后无需重启，会在运行时生效。',
+          title: '自动刷新 Token',
+          description: 'OAuth token 会在到期前 1 小时内按账号随机时间自动刷新。',
+          policy: '当前策略固定为：后台定期检查账号 token，到期前 1 小时内随机选择时间刷新，并在最后几分钟内做兜底刷新。',
         },
         affiliate: {
           title: '邀请返利',

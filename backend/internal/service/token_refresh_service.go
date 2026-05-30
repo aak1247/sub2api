@@ -16,6 +16,8 @@ import (
 
 // tokenRefreshTempUnschedDuration token 刷新重试耗尽后临时不可调度的持续时间
 const tokenRefreshTempUnschedDuration = 10 * time.Minute
+const tokenRefreshRandomBeforeExpiryWindow = time.Hour
+const tokenRefreshSafetyRefreshWindow = 3 * time.Minute
 
 const tokenRefreshNextScheduledAtExtraKey = "token_refresh_next_scheduled_at"
 
@@ -27,7 +29,6 @@ type TokenRefreshService struct {
 	executors        []OAuthRefreshExecutor // 与 refreshers 一一对应的 executor（带 CacheKey）
 	refreshPolicy    BackgroundRefreshPolicy
 	cfg              *config.TokenRefreshConfig
-	settingService   *SettingService
 	cacheInvalidator TokenCacheInvalidator
 	schedulerCache   SchedulerCache   // 用于同步更新调度器缓存，解决 token 刷新后缓存不一致问题
 	tempUnschedCache TempUnschedCache // 用于清除 Redis 中的临时不可调度缓存
@@ -109,11 +110,6 @@ func (s *TokenRefreshService) SetRefreshPolicy(policy BackgroundRefreshPolicy) {
 	s.refreshPolicy = policy
 }
 
-// SetSettingService 注入运行时系统设置读取器。
-func (s *TokenRefreshService) SetSettingService(settingService *SettingService) {
-	s.settingService = settingService
-}
-
 // Start 启动后台刷新服务
 func (s *TokenRefreshService) Start() {
 	if !s.cfg.Enabled {
@@ -126,9 +122,8 @@ func (s *TokenRefreshService) Start() {
 
 	slog.Info("token_refresh.service_started",
 		"check_interval_minutes", s.cfg.CheckIntervalMinutes,
-		"scheduled_refresh_min_interval_minutes", s.cfg.ScheduledRefreshMinIntervalMinutes,
-		"scheduled_refresh_max_interval_minutes", s.cfg.ScheduledRefreshMaxIntervalMinutes,
-		"refresh_before_expiry_hours", s.cfg.RefreshBeforeExpiryHours,
+		"random_before_expiry_minutes", int(tokenRefreshRandomBeforeExpiryWindow.Minutes()),
+		"safety_refresh_window_minutes", int(tokenRefreshSafetyRefreshWindow.Minutes()),
 	)
 }
 
@@ -171,9 +166,7 @@ func (s *TokenRefreshService) refreshLoop() {
 func (s *TokenRefreshService) processRefresh() {
 	ctx := context.Background()
 
-	// 计算刷新窗口
-	refreshWindow := time.Duration(s.cfg.RefreshBeforeExpiryHours * float64(time.Hour))
-	scheduledRuntime := s.scheduledRefreshRuntime(ctx)
+	refreshWindow := tokenRefreshSafetyRefreshWindow
 
 	// 获取所有active状态的账号
 	accounts, err := s.listActiveAccounts(ctx)
@@ -198,11 +191,14 @@ func (s *TokenRefreshService) processRefresh() {
 
 			oauthAccounts++
 
-			// 检查是否需要刷新：过期窗口优先，其次按账号随机定时间隔强制刷新
-			needsExpiryRefresh := refresher.NeedsRefresh(account, refreshWindow)
+			// 检查是否需要刷新：安全兜底窗口优先，其次按到期前 1 小时内的账号随机时间强制刷新。
+			needsExpiryRefresh := tokenRefreshNeedsSafetyRefresh(account, refreshWindow)
+			if !needsExpiryRefresh && tokenRefreshExpiresAt(account) == nil {
+				needsExpiryRefresh = refresher.NeedsRefresh(account, refreshWindow)
+			}
 			forceRefresh := false
 			if !needsExpiryRefresh {
-				forceRefresh = s.needsScheduledRefresh(ctx, account, scheduledRuntime)
+				forceRefresh = s.needsRandomExpiryRefresh(ctx, account)
 			}
 			if !needsExpiryRefresh && !forceRefresh {
 				break // 不需要刷新，跳过
@@ -229,11 +225,11 @@ func (s *TokenRefreshService) processRefresh() {
 					failed++
 				}
 			} else {
-				s.scheduleNextRefresh(ctx, account, scheduledRuntime)
+				s.scheduleNextExpiryRefreshFromLatest(ctx, account)
 				slog.Info("token_refresh.account_refreshed",
 					"account_id", account.ID,
 					"account_name", account.Name,
-					"scheduled", forceRefresh,
+					"random_expiry_schedule", forceRefresh,
 				)
 				refreshed++
 			}
@@ -260,31 +256,36 @@ func (s *TokenRefreshService) processRefresh() {
 	}
 }
 
-func (s *TokenRefreshService) scheduledRefreshRuntime(ctx context.Context) TokenRefreshScheduledRuntime {
-	if s.settingService != nil {
-		return s.settingService.GetTokenRefreshScheduledRuntime(ctx)
-	}
-	if s.cfg == nil {
-		return tokenRefreshScheduledRuntimeFromSettings(nil, nil)
-	}
-	return tokenRefreshScheduledRuntimeFromSettings(nil, &config.Config{TokenRefresh: *s.cfg})
-}
-
-func (s *TokenRefreshService) scheduledRefreshEnabled(runtime TokenRefreshScheduledRuntime) bool {
-	return runtime.Enabled && runtime.MinIntervalMinutes > 0 &&
-		runtime.MaxIntervalMinutes >= runtime.MinIntervalMinutes
-}
-
-func (s *TokenRefreshService) needsScheduledRefresh(ctx context.Context, account *Account, runtime TokenRefreshScheduledRuntime) bool {
-	if !s.scheduledRefreshEnabled(runtime) {
+func (s *TokenRefreshService) needsRandomExpiryRefresh(ctx context.Context, account *Account) bool {
+	expiresAt := tokenRefreshExpiresAt(account)
+	if expiresAt == nil {
 		return false
+	}
+	now := time.Now()
+	if !expiresAt.After(now) {
+		return true
 	}
 	nextRefreshAt, ok := tokenRefreshScheduledAt(account)
-	if !ok {
-		s.scheduleNextRefresh(ctx, account, runtime)
+	if !ok || !tokenRefreshScheduleMatchesExpiry(nextRefreshAt, *expiresAt) {
+		nextRefreshAt = s.scheduleNextExpiryRefresh(ctx, account, *expiresAt, now)
 		return false
 	}
-	return !time.Now().Before(nextRefreshAt)
+	return !now.Before(nextRefreshAt)
+}
+
+func tokenRefreshExpiresAt(account *Account) *time.Time {
+	if account == nil {
+		return nil
+	}
+	return account.GetCredentialAsTime("expires_at")
+}
+
+func tokenRefreshNeedsSafetyRefresh(account *Account, refreshWindow time.Duration) bool {
+	expiresAt := tokenRefreshExpiresAt(account)
+	if expiresAt == nil {
+		return false
+	}
+	return time.Until(*expiresAt) < refreshWindow
 }
 
 func tokenRefreshScheduledAt(account *Account) (time.Time, bool) {
@@ -321,11 +322,46 @@ func tokenRefreshScheduledAt(account *Account) (time.Time, bool) {
 	}
 }
 
-func (s *TokenRefreshService) scheduleNextRefresh(ctx context.Context, account *Account, runtime TokenRefreshScheduledRuntime) {
-	if !s.scheduledRefreshEnabled(runtime) || account == nil {
+func tokenRefreshScheduleMatchesExpiry(nextRefreshAt, expiresAt time.Time) bool {
+	if nextRefreshAt.IsZero() || expiresAt.IsZero() {
+		return false
+	}
+	windowStart := expiresAt.Add(-tokenRefreshRandomBeforeExpiryWindow)
+	windowEnd := expiresAt.Add(-tokenRefreshSafetyRefreshWindow)
+	if windowEnd.Before(windowStart) {
+		windowEnd = windowStart
+	}
+	return !nextRefreshAt.Before(windowStart) && !nextRefreshAt.After(windowEnd)
+}
+
+func (s *TokenRefreshService) scheduleNextExpiryRefreshFromLatest(ctx context.Context, account *Account) {
+	if account == nil || s.accountRepo == nil {
 		return
 	}
-	nextRefreshAt := time.Now().Add(s.randomScheduledRefreshInterval(runtime))
+	if expiresAt := tokenRefreshExpiresAt(account); expiresAt != nil {
+		s.scheduleNextExpiryRefresh(ctx, account, *expiresAt, time.Now())
+		return
+	}
+	latest, err := s.accountRepo.GetByID(ctx, account.ID)
+	if err != nil || latest == nil {
+		slog.Warn("token_refresh.reload_after_refresh_failed",
+			"account_id", account.ID,
+			"error", err,
+		)
+		return
+	}
+	expiresAt := tokenRefreshExpiresAt(latest)
+	if expiresAt == nil {
+		return
+	}
+	s.scheduleNextExpiryRefresh(ctx, latest, *expiresAt, time.Now())
+}
+
+func (s *TokenRefreshService) scheduleNextExpiryRefresh(ctx context.Context, account *Account, expiresAt, now time.Time) time.Time {
+	if account == nil || !expiresAt.After(now) {
+		return time.Time{}
+	}
+	nextRefreshAt := randomExpiryRefreshAt(now, expiresAt)
 	if account.Extra == nil {
 		account.Extra = make(map[string]any)
 	}
@@ -340,26 +376,31 @@ func (s *TokenRefreshService) scheduleNextRefresh(ctx context.Context, account *
 	} else {
 		slog.Debug("token_refresh.next_scheduled",
 			"account_id", account.ID,
+			"expires_at", expiresAt.Format(time.RFC3339),
 			"next_refresh_at", nextRefreshAt.Format(time.RFC3339),
 		)
 	}
+	return nextRefreshAt
 }
 
-func (s *TokenRefreshService) randomScheduledRefreshInterval(runtime TokenRefreshScheduledRuntime) time.Duration {
-	minMinutes := runtime.MinIntervalMinutes
-	maxMinutes := runtime.MaxIntervalMinutes
-	if minMinutes <= 0 || maxMinutes < minMinutes {
-		return 0
+func randomExpiryRefreshAt(now, expiresAt time.Time) time.Time {
+	windowStart := expiresAt.Add(-tokenRefreshRandomBeforeExpiryWindow)
+	if windowStart.Before(now) {
+		windowStart = now
 	}
-	span := maxMinutes - minMinutes + 1
-	if span <= 1 {
-		return time.Duration(minMinutes) * time.Minute
+	windowEnd := expiresAt.Add(-tokenRefreshSafetyRefreshWindow)
+	if windowEnd.Before(windowStart) {
+		windowEnd = windowStart
 	}
-	offset, err := rand.Int(rand.Reader, big.NewInt(int64(span)))
+	span := windowEnd.Sub(windowStart)
+	if span <= 0 {
+		return windowStart
+	}
+	offsetNanos, err := rand.Int(rand.Reader, big.NewInt(span.Nanoseconds()))
 	if err != nil {
-		return time.Duration(minMinutes) * time.Minute
+		return windowStart
 	}
-	return time.Duration(minMinutes+int(offset.Int64())) * time.Minute
+	return windowStart.Add(time.Duration(offsetNanos.Int64()))
 }
 
 // listActiveAccounts 获取所有active状态的账号
