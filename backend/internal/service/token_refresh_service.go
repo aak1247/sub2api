@@ -45,6 +45,7 @@ type TokenRefreshService struct {
 
 type accountRefreshedSetter interface {
 	SetRefreshed(ctx context.Context, id int64, errorMsg string) error
+	SetError(ctx context.Context, id int64, errorMsg string) error
 }
 
 // NewTokenRefreshService 创建token刷新服务
@@ -182,6 +183,12 @@ func (s *TokenRefreshService) processRefresh() {
 
 	for i := range accounts {
 		account := &accounts[i]
+
+		// 跳过未启用调度的账号，无需刷新 token
+		if !account.Schedulable {
+			skipped++
+			continue
+		}
 
 		// 遍历所有刷新器，找到能处理此账号的
 		for idx, refresher := range s.refreshers {
@@ -455,19 +462,30 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 			return nil
 		}
 
-		// 不可重试错误（invalid_grant/invalid_client 等）直接标记刷新失败状态并返回
+		// 不可重试错误（invalid_grant/invalid_client 等）直接标记失败状态并返回
 		if isNonRetryableRefreshError(err) {
 			errorMsg := fmt.Sprintf("Token refresh failed for account %q (non-retryable): %v", account.Name, err)
-			if setErr := s.setAccountRefreshed(ctx, account, errorMsg); setErr != nil {
-				slog.Error("token_refresh.set_refreshed_status_failed",
-					"account_id", account.ID,
-					"account_name", account.Name,
-					"error", setErr,
-				)
+			if isUnrecoverableRefreshError(err) {
+				// 不可恢复错误（如 refresh_token_reused），标记为 error 状态，不再重试
+				if setErr := s.setAccountError(ctx, account, errorMsg); setErr != nil {
+					slog.Error("token_refresh.set_error_status_failed",
+						"account_id", account.ID,
+						"account_name", account.Name,
+						"error", setErr,
+					)
+				}
+			} else {
+				if setErr := s.setAccountRefreshed(ctx, account, errorMsg); setErr != nil {
+					slog.Error("token_refresh.set_refreshed_status_failed",
+						"account_id", account.ID,
+						"account_name", account.Name,
+						"error", setErr,
+					)
+				}
+				// 刷新失败但 access_token 可能仍有效，尝试设置隐私
+				s.ensureOpenAIPrivacy(ctx, account)
+				s.ensureAntigravityPrivacy(ctx, account)
 			}
-			// 刷新失败但 access_token 可能仍有效，尝试设置隐私
-			s.ensureOpenAIPrivacy(ctx, account)
-			s.ensureAntigravityPrivacy(ctx, account)
 			return err
 		}
 
@@ -526,6 +544,20 @@ func (s *TokenRefreshService) setAccountRefreshed(ctx context.Context, account *
 		return err
 	}
 	updated.Status = StatusRefreshed
+	updated.ErrorMessage = errorMsg
+	return s.accountRepo.Update(ctx, updated)
+}
+
+// setAccountError 将账号标记为 error 状态（不可恢复的刷新错误）
+func (s *TokenRefreshService) setAccountError(ctx context.Context, account *Account, errorMsg string) error {
+	if setter, ok := s.accountRepo.(accountRefreshedSetter); ok {
+		return setter.SetError(ctx, account.ID, errorMsg)
+	}
+	updated, err := s.accountRepo.GetByID(ctx, account.ID)
+	if err != nil {
+		return err
+	}
+	updated.Status = StatusError
 	updated.ErrorMessage = errorMsg
 	return s.accountRepo.Update(ctx, updated)
 }
@@ -626,8 +658,30 @@ func isNonRetryableRefreshError(err error) bool {
 		"access_denied",       // 访问被拒绝
 		"missing_project_id",  // 缺少 project_id
 		"no refresh token available",
+		"refresh_token_reused", // refresh_token 已被使用，需要重新登录
+		"invalid_refresh_token", // refresh_token 无效
 	}
 	for _, needle := range nonRetryable {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// isUnrecoverableRefreshError 判断是否为完全不可恢复的刷新错误
+// 这类错误需要用户重新登录授权，无法通过重试解决，应标记为 error 状态
+func isUnrecoverableRefreshError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	unrecoverable := []string{
+		"refresh_token_reused",   // refresh_token 已被使用，需要重新登录
+		"invalid_grant",          // refresh_token 已失效
+		"invalid_refresh_token",  // refresh_token 无效
+	}
+	for _, needle := range unrecoverable {
 		if strings.Contains(msg, needle) {
 			return true
 		}

@@ -306,13 +306,16 @@
           <template #cell-groups="{ row }">
             <AccountGroupsCell :groups="row.groups" :max-display="4" />
           </template>
-          <template #cell-usage="{ row }">
+          <template #cell-usage_window_refreshed_at="{ row }">
             <AccountUsageCell
               :account="row"
               :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
               :today-stats-loading="todayStatsLoading"
               :manual-refresh-token="usageManualRefreshToken"
             />
+          </template>
+          <template #cell-created_at="{ value }">
+            <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(value) }}</span>
           </template>
           <template #cell-proxy="{ row }">
             <div v-if="row.proxy" class="flex items-center gap-2">
@@ -586,7 +589,9 @@ const ACCOUNT_SORTABLE_KEYS = new Set([
   'priority',
   'rate_multiplier',
   'last_used_at',
-  'expires_at'
+  'expires_at',
+  'created_at',
+  'usage_window_refreshed_at'
 ])
 const loadInitialAccountSortState = (): AccountSortState => {
   const fallback: AccountSortState = { sort_by: 'name', sort_order: 'asc' }
@@ -637,9 +642,9 @@ const buildDefaultTodayStats = (): WindowStats => ({
 const refreshTodayStatsBatch = async () => {
   // Why this checks both columns:
   // - today_stats column shows dedicated today's metrics.
-  // - usage column also embeds today's stats for Key/Bedrock rows.
+  // - usage_window_refreshed_at column also embeds today's stats for Key/Bedrock rows.
   // So we only skip fetching when BOTH columns are hidden.
-  if (hiddenColumns.has('today_stats') && hiddenColumns.has('usage')) {
+  if (hiddenColumns.has('today_stats') && hiddenColumns.has('usage_window_refreshed_at')) {
     todayStatsLoading.value = false
     todayStatsError.value = null
     return
@@ -692,7 +697,7 @@ const loadSavedColumns = () => {
     if (saved) {
       const parsed = JSON.parse(saved) as string[]
       parsed.forEach(key => {
-        hiddenColumns.add(key)
+        hiddenColumns.add(key === 'usage' ? 'usage_window_refreshed_at' : key)
       })
     } else {
       DEFAULT_HIDDEN_COLUMNS.forEach(key => {
@@ -777,7 +782,7 @@ const toggleColumn = (key: string) => {
     hiddenColumns.add(key)
   }
   saveColumnsToStorage()
-  if ((key === 'today_stats' || key === 'usage') && wasHidden) {
+  if ((key === 'today_stats' || key === 'usage_window_refreshed_at') && wasHidden) {
     refreshTodayStatsBatch().catch((error) => {
       console.error('Failed to load account today stats after showing column:', error)
     })
@@ -1279,12 +1284,13 @@ const allColumns = computed(() => {
     c.push({ key: 'groups', label: t('admin.accounts.columns.groups'), sortable: false })
   }
   c.push(
-    { key: 'usage', label: t('admin.accounts.columns.usageWindows'), sortable: false },
+    { key: 'usage_window_refreshed_at', label: t('admin.accounts.columns.usageWindows'), sortable: true },
     { key: 'proxy', label: t('admin.accounts.columns.proxy'), sortable: false },
     { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
     { key: 'rate_multiplier', label: t('admin.accounts.columns.billingRateMultiplier'), sortable: true },
     { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
     { key: 'expires_at', label: t('admin.accounts.columns.expiresAt'), sortable: true },
+    { key: 'created_at', label: t('admin.accounts.columns.createdAt'), sortable: true },
     { key: 'notes', label: t('admin.accounts.columns.notes'), sortable: false },
     { key: 'actions', label: t('admin.accounts.columns.actions'), sortable: false }
   )

@@ -3024,6 +3024,7 @@ export default {
         proxy: 'Proxy',
         lastUsed: 'Last Used',
         expiresAt: 'Expires At',
+        createdAt: 'Created At',
         actions: 'Actions'
       },
       allPrivacyModes: 'All Privacy States',

@@ -630,6 +630,8 @@ func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selecto
 	case "created_at":
 		field = dbaccount.FieldCreatedAt
 		defaultOrder = false
+	case "usage_window_refreshed_at":
+		return accountListUsageWindowRefreshedAtOrder(sortOrder)
 	}
 
 	if sortOrder == pagination.SortOrderDesc {
@@ -639,6 +641,22 @@ func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selecto
 		return []func(*entsql.Selector){dbent.Asc(dbaccount.FieldName), dbent.Asc(dbaccount.FieldID)}
 	}
 	return []func(*entsql.Selector){dbent.Asc(field), dbent.Asc(dbaccount.FieldID)}
+}
+
+func accountListUsageWindowRefreshedAtOrder(sortOrder string) []func(*entsql.Selector) {
+	direction := "ASC"
+	tieOrder := entsql.Asc
+	if sortOrder == pagination.SortOrderDesc {
+		direction = "DESC"
+		tieOrder = entsql.Desc
+	}
+
+	return []func(*entsql.Selector){
+		func(s *entsql.Selector) {
+			s.OrderExpr(entsql.Expr("NULLIF(" + s.C(dbaccount.FieldExtra) + "->>'codex_usage_updated_at','') " + direction + " NULLS LAST"))
+			s.OrderBy(tieOrder(s.C(dbaccount.FieldID)))
+		},
+	}
 }
 
 func (r *accountRepository) ListByGroup(ctx context.Context, groupID int64) ([]service.Account, error) {

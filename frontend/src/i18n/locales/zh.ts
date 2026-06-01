@@ -3061,6 +3061,7 @@ export default {
         proxy: '代理',
         lastUsed: '最近使用',
         expiresAt: '过期时间',
+        createdAt: '创建时间',
         actions: '操作'
       },
       allPrivacyModes: '全部Privacy状态',
