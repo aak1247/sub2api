@@ -280,3 +280,23 @@ func TestProxyImportDataReusesAndTriggersLatencyProbe(t *testing.T) {
 		return len(adminSvc.testedProxyIDs) == 1
 	}, time.Second, 10*time.Millisecond)
 }
+
+func TestProxyImportDataRequiresProxies(t *testing.T) {
+	router, _ := setupProxyDataRouter()
+
+	payload := map[string]any{
+		"data": map[string]any{
+			"type":     dataType,
+			"version":  dataVersion,
+			"accounts": []map[string]any{},
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/proxies/data", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "proxies is required")
+}

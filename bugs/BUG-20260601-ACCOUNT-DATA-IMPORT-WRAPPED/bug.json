@@ -1,0 +1,95 @@
+{
+  "format_version": 1,
+  "bug_id": "BUG-20260601-ACCOUNT-DATA-IMPORT-WRAPPED",
+  "title": "Account data JSON import rejects wrapped request payload as proxies is required",
+  "status": "ARCHIVED",
+  "scope": "FRONTEND_PAGE",
+  "severity": "S2",
+  "priority": "P2",
+  "reporter": "aak1247",
+  "assignee": "codex",
+  "created_at": "2026-06-01T09:46:58Z",
+  "updated_at": "2026-06-01T09:48:07Z",
+  "impact_modules": [
+    "frontend account import modal",
+    "backend account data import"
+  ],
+  "impact_summary": "",
+  "environment": "local dev, 2026-06-01",
+  "tags": [],
+  "links": {
+    "issue_url": "",
+    "pr_url": "",
+    "commit": ""
+  },
+  "reproduction": {
+    "preconditions": [
+      "admin opens account data import modal",
+      "JSON file contains top-level data object wrapping sub2api-data payload"
+    ],
+    "steps": [
+      "open admin accounts page",
+      "open data import modal",
+      "choose JSON file shaped as {data:{type,version,proxies,accounts},skip_default_group_bind:true}",
+      "click import"
+    ],
+    "e2e_full_flow": [
+      "open admin accounts page",
+      "open data import modal",
+      "choose wrapped JSON export/request file",
+      "submit import",
+      "frontend sends inner data payload to /admin/accounts/data",
+      "backend imports account without proxies is required error"
+    ],
+    "expected": "account import accepts wrapped JSON payload and imports accounts",
+    "actual": "frontend wraps the uploaded JSON again so backend receives data.data and reports proxies is required",
+    "attempts": 1,
+    "successes": 1,
+    "probability": "100.0%",
+    "notes": ""
+  },
+  "tracking": {
+    "next_check_date": "2026-06-01",
+    "blockers": [],
+    "latest_push_action": "",
+    "progress": [
+      {
+        "at": "2026-06-01T09:46:58Z",
+        "by": "aak1247",
+        "status": "REPRODUCED",
+        "action": "Bug intake completed and saved",
+        "note": "Capture bug basics and reproduction signals"
+      },
+      {
+        "at": "2026-06-01T09:47:25Z",
+        "by": "aak1247",
+        "status": "RESOLVED",
+        "action": "Verify account import accepts wrapped payload via frontend integration test and backend handler tests.",
+        "note": "Fixed frontend payload normalization and narrowed backend payload validation by import surface.",
+        "next_check_date": "2026-06-01"
+      },
+      {
+        "at": "2026-06-01T09:48:07Z",
+        "by": "aak1247",
+        "status": "ARCHIVED",
+        "action": "Archive bug with automated regression test",
+        "note": ""
+      }
+    ]
+  },
+  "resolution": {
+    "root_cause": "",
+    "fix_summary": "",
+    "pr_url": "",
+    "commit": "",
+    "resolved_at": "2026-06-01T09:48:07Z"
+  },
+  "regression_test": {
+    "path": "frontend/src/__tests__/integration/data-import.spec.ts",
+    "command": "pnpm --dir frontend exec vitest run src/__tests__/integration/data-import.spec.ts",
+    "type": "e2e",
+    "framework": "vitest",
+    "last_run_at": "2026-06-01T09:48:07Z",
+    "result": "passed"
+  }
+}

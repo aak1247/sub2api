@@ -207,7 +207,7 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 		return
 	}
 
-	if err := validateDataHeader(req.Data); err != nil {
+	if err := validateAccountDataPayload(req.Data); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
@@ -228,7 +228,7 @@ func (h *AccountHandler) SearchData(c *gin.Context) {
 		return
 	}
 
-	if err := validateDataHeader(req.Data); err != nil {
+	if err := validateAccountDataPayload(req.Data); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
@@ -849,18 +849,32 @@ func parseIncludeProxies(c *gin.Context) (bool, error) {
 	}
 }
 
-func validateDataHeader(payload DataPayload) error {
+func validateDataEnvelope(payload DataPayload) error {
 	if payload.Type != "" && payload.Type != dataType && payload.Type != legacyDataType {
 		return fmt.Errorf("unsupported data type: %s", payload.Type)
 	}
 	if payload.Version != 0 && payload.Version != dataVersion {
 		return fmt.Errorf("unsupported data version: %d", payload.Version)
 	}
-	if payload.Proxies == nil {
-		return errors.New("proxies is required")
+	return nil
+}
+
+func validateAccountDataPayload(payload DataPayload) error {
+	if err := validateDataEnvelope(payload); err != nil {
+		return err
 	}
 	if payload.Accounts == nil {
 		return errors.New("accounts is required")
+	}
+	return nil
+}
+
+func validateProxyDataPayload(payload DataPayload) error {
+	if err := validateDataEnvelope(payload); err != nil {
+		return err
+	}
+	if payload.Proxies == nil {
+		return errors.New("proxies is required")
 	}
 	return nil
 }

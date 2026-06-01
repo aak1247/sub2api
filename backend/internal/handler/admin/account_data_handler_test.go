@@ -409,6 +409,85 @@ func TestImportDataSkipsDuplicateAccountNames(t *testing.T) {
 	require.Contains(t, resp.Data.Errors[1].Message, "import payload")
 }
 
+func TestImportDataAllowsMissingProxiesForAccountOnlyPayload(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+	adminSvc.accounts = nil
+
+	dataPayload := map[string]any{
+		"data": map[string]any{
+			"type":    dataType,
+			"version": dataVersion,
+			"accounts": []map[string]any{
+				{
+					"name":        "acc",
+					"platform":    service.PlatformOpenAI,
+					"type":        service.AccountTypeAPIKey,
+					"credentials": map[string]any{"api_key": "sk-imported"},
+					"concurrency": 3,
+					"priority":    50,
+				},
+			},
+		},
+	}
+
+	body, _ := json.Marshal(dataPayload)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Code int              `json:"code"`
+		Data DataImportResult `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Equal(t, 1, resp.Data.AccountCreated)
+	require.Equal(t, 0, resp.Data.AccountFailed)
+	require.Len(t, adminSvc.createdAccounts, 1)
+	require.Equal(t, "acc", adminSvc.createdAccounts[0].Name)
+}
+
+func TestSearchDataAllowsMissingProxiesForAccountOnlyPayload(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+	adminSvc.accounts = []service.Account{
+		{ID: 101, Name: "acc", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Credentials: map[string]any{"api_key": "sk-existing"}, Status: service.StatusActive},
+	}
+
+	dataPayload := map[string]any{
+		"data": map[string]any{
+			"type":    dataType,
+			"version": dataVersion,
+			"accounts": []map[string]any{
+				{
+					"name":        "acc",
+					"platform":    service.PlatformOpenAI,
+					"type":        service.AccountTypeAPIKey,
+					"credentials": map[string]any{"api_key": "sk-existing"},
+					"concurrency": 3,
+					"priority":    50,
+				},
+			},
+		},
+	}
+
+	body, _ := json.Marshal(dataPayload)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data/search", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp searchResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Equal(t, 1, resp.Data.AccountCandidates)
+	require.Equal(t, 1, resp.Data.AccountMatched)
+	require.Len(t, resp.Data.Accounts, 1)
+	require.Equal(t, int64(101), resp.Data.Accounts[0].ID)
+}
+
 func TestImportDataOverwriteExistingAccount(t *testing.T) {
 	router, adminSvc := setupAccountDataRouter()
 	adminSvc.accounts = []service.Account{

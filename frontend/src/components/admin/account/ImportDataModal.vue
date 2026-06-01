@@ -175,7 +175,13 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
-import type { Account, AdminDataDuplicateAccountMode, AdminDataImportResult, AdminDataSearchResult } from '@/types'
+import type {
+  Account,
+  AdminDataDuplicateAccountMode,
+  AdminDataImportResult,
+  AdminDataPayload,
+  AdminDataSearchResult
+} from '@/types'
 
 interface Props {
   show: boolean
@@ -261,7 +267,19 @@ const readPayload = async () => {
     throw new Error('file_required')
   }
   const text = await readFileAsText(file.value)
-  return JSON.parse(text)
+  const parsed = JSON.parse(text) as unknown
+  if (
+    parsed &&
+    typeof parsed === 'object' &&
+    !Array.isArray(parsed) &&
+    'data' in parsed &&
+    (parsed as { data?: unknown }).data &&
+    typeof (parsed as { data?: unknown }).data === 'object' &&
+    !Array.isArray((parsed as { data?: unknown }).data)
+  ) {
+    return (parsed as { data: AdminDataPayload }).data
+  }
+  return parsed as AdminDataPayload
 }
 
 const handleSearch = async () => {

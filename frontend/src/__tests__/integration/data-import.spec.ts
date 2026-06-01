@@ -129,6 +129,73 @@ describe('ImportDataModal', () => {
     expect(showError).not.toHaveBeenCalledWith('admin.accounts.dataImportParseFailed')
   })
 
+  it('导入完整请求体格式时会提取内层 data 作为数据载荷', async () => {
+    const { adminAPI } = await import('@/api/admin')
+    const importMock = adminAPI.accounts.importData as ReturnType<typeof vi.fn>
+    importMock.mockResolvedValue({
+      proxy_created: 0,
+      proxy_reused: 0,
+      proxy_failed: 0,
+      account_created: 1,
+      account_updated: 0,
+      account_failed: 0,
+      errors: []
+    })
+
+    const payload = {
+      type: 'sub2api-data',
+      version: 1,
+      exported_at: '2026-06-01T09:37:10Z',
+      proxies: [],
+      accounts: [
+        {
+          name: 'acc',
+          platform: 'openai',
+          type: 'oauth',
+          credentials: { access_token: 'token' },
+          extra: { email: 'acc@example.com' },
+          concurrency: 10,
+          priority: 1,
+          rate_multiplier: 1,
+          auto_pause_on_expired: true
+        }
+      ]
+    }
+    const requestPayload = {
+      data: payload,
+      skip_default_group_bind: true
+    }
+    const wrapper = mount(ImportDataModal, {
+      props: { show: true },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
+        }
+      }
+    })
+
+    const input = wrapper.find('input[type="file"]')
+    const file = new File([JSON.stringify(requestPayload)], 'data.json', { type: 'application/json' })
+    Object.defineProperty(file, 'text', {
+      value: () => Promise.resolve(JSON.stringify(requestPayload))
+    })
+    Object.defineProperty(input.element, 'files', {
+      value: [file]
+    })
+
+    await input.trigger('change')
+    await wrapper.find('form').trigger('submit')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(importMock).toHaveBeenCalledWith({
+      data: payload,
+      skip_default_group_bind: true,
+      update_existing: false,
+      duplicate_account_mode: 'skip'
+    })
+    expect(showSuccess).toHaveBeenCalledWith('admin.accounts.dataImportSuccess')
+  })
+
   it('重复账号错误结果显示覆盖导入按钮并带 update_existing 重试', async () => {
     const { adminAPI } = await import('@/api/admin')
     const importMock = adminAPI.accounts.importData as ReturnType<typeof vi.fn>
