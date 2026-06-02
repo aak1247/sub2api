@@ -74,11 +74,16 @@ type UserListFilters struct {
 	// For large datasets this can be expensive; admin list pages should enable it on demand.
 	// nil means not specified (default: load subscriptions for backward compatibility).
 	IncludeSubscriptions *bool
+	// IncludeDeleted 为 true 时绕过软删除过滤，返回含已删除（deleted_at 非空）的用户。
+	// 仅供 /admin/usage 的 SearchUsers 端点使用，其他列表调用方不要设置。
+	IncludeDeleted bool
 }
 
 type UserRepository interface {
 	Create(ctx context.Context, user *User) error
 	GetByID(ctx context.Context, id int64) (*User, error)
+	// GetByIDIncludeDeleted 绕过软删除过滤按 ID 取用户（含已删）。仅供管理员审计/usage 点击使用。
+	GetByIDIncludeDeleted(ctx context.Context, id int64) (*User, error)
 	GetByEmail(ctx context.Context, email string) (*User, error)
 	GetFirstAdmin(ctx context.Context) (*User, error)
 	Update(ctx context.Context, user *User) error
@@ -1121,7 +1126,7 @@ func (s *UserService) Delete(ctx context.Context, userID int64) error {
 }
 
 // SendNotifyEmailCode sends a verification code to the extra notification email.
-func (s *UserService) SendNotifyEmailCode(ctx context.Context, userID int64, email string, emailService *EmailService, cache EmailCache) error {
+func (s *UserService) SendNotifyEmailCode(ctx context.Context, userID int64, email string, emailService *EmailService, cache EmailCache, locale ...string) error {
 	if err := checkNotifyCodeRateLimit(ctx, cache, userID, email); err != nil {
 		return err
 	}
@@ -1133,7 +1138,7 @@ func (s *UserService) SendNotifyEmailCode(ctx context.Context, userID int64, ema
 
 	// Send email first — if SMTP fails, don't write cache or increment counters,
 	// so the user is not locked out by cooldown/rate-limit for a code they never received.
-	if err := s.sendNotifyVerifyEmail(ctx, emailService, email, code); err != nil {
+	if err := s.sendNotifyVerifyEmail(ctx, emailService, userID, email, code, firstEmailLocale(locale)); err != nil {
 		return err
 	}
 
@@ -1179,11 +1184,31 @@ func saveNotifyVerifyCode(ctx context.Context, cache EmailCache, email, code str
 }
 
 // sendNotifyVerifyEmail builds and sends the verification email.
-func (s *UserService) sendNotifyVerifyEmail(ctx context.Context, emailService *EmailService, email, code string) error {
+func (s *UserService) sendNotifyVerifyEmail(ctx context.Context, emailService *EmailService, userID int64, email, code, locale string) error {
 	siteName := "Sub2API"
 	if s.settingRepo != nil {
 		if name, err := s.settingRepo.GetValue(ctx, SettingKeySiteName); err == nil && name != "" {
 			siteName = name
+		}
+	}
+	if emailService.notificationEmailService != nil {
+		if err := emailService.notificationEmailService.Send(ctx, NotificationEmailSendInput{
+			Event:          NotificationEmailEventNotificationEmailVerifyCode,
+			Locale:         locale,
+			RecipientEmail: email,
+			RecipientName:  emailRecipientName(email),
+			UserID:         userID,
+			Variables: map[string]string{
+				"verification_code":  code,
+				"expires_in_minutes": strconv.Itoa(int(verifyCodeTTL / time.Minute)),
+			},
+		}); err == nil {
+			return nil
+		} else {
+			if !shouldFallbackNotificationEmail(err) {
+				return err
+			}
+			slog.Warn("template notification email verification failed; falling back to built-in body", "recipient_hash", notificationEmailHash(email), "err", err.Error())
 		}
 	}
 	subject := fmt.Sprintf("[%s] 通知邮箱验证码 / Notification Email Verification", siteName)
