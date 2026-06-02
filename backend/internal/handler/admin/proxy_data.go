@@ -103,7 +103,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 		return
 	}
 
-	if err := validateDataHeader(req.Data); err != nil {
+	if err := validateProxyDataPayload(req.Data); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}

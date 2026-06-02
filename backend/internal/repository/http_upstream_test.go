@@ -828,6 +828,32 @@ func (s *HTTPUpstreamSuite) TestDo_EmptyProxy_UsesDirect() {
 	require.Equal(s.T(), "direct-empty", string(b))
 }
 
+// TestDo_ReadToEOFReleasesInFlight 测试读完响应体即可释放活跃计数
+// 防止调用方读完非流式响应后漏 Close 导致连接池条目永久不可淘汰。
+func (s *HTTPUpstreamSuite) TestDo_ReadToEOFReleasesInFlight() {
+	upstream := newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "done")
+	}))
+	s.T().Cleanup(upstream.Close)
+
+	s.cfg.Gateway = config.GatewayConfig{ConnectionPoolIsolation: config.ConnectionPoolIsolationAccount}
+	svc := s.newService()
+
+	req, err := http.NewRequest(http.MethodGet, upstream.URL+"/eof", nil)
+	require.NoError(s.T(), err, "NewRequest")
+	resp, err := svc.Do(req, "", 1, 1)
+	require.NoError(s.T(), err, "Do")
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(s.T(), err, "ReadAll")
+	require.Equal(s.T(), "done", string(body))
+
+	entry := mustGetOrCreateClient(s.T(), svc, "", 1, 1)
+	require.Eventually(s.T(), func() bool {
+		return atomic.LoadInt64(&entry.inFlight) == 0
+	}, time.Second, 10*time.Millisecond, "read to EOF should release in-flight request")
+	_ = resp.Body.Close()
+}
+
 // TestAccountIsolation_DifferentAccounts 测试账户隔离模式
 // 验证不同账户使用独立的连接池
 func (s *HTTPUpstreamSuite) TestAccountIsolation_DifferentAccounts() {

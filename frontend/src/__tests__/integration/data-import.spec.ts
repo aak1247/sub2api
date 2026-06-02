@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { mount } from '@vue/test-utils'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
 
 const showError = vi.fn()
@@ -17,7 +17,8 @@ vi.mock('@/stores/app', () => ({
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
-      importData: vi.fn()
+      importData: vi.fn(),
+      searchData: vi.fn()
     }
   }
 }))
@@ -28,187 +29,310 @@ vi.mock('vue-i18n', () => ({
   })
 }))
 
-const mountModal = () =>
-  mount(ImportDataModal, {
-    props: { show: true },
-    global: {
-      stubs: {
-        BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
-      }
-    }
-  })
-
-const makeJsonFile = (name: string, content: string, type = 'application/json') => {
-  const file = new File([content], name, { type })
-  Object.defineProperty(file, 'text', {
-    value: () => Promise.resolve(content)
-  })
-  return file
-}
-
-const setInputFiles = (element: Element, files: File[]) => {
-  Object.defineProperty(element, 'files', {
-    value: files,
-    configurable: true
-  })
-}
-
 describe('ImportDataModal', () => {
-  beforeEach(async () => {
-    showError.mockReset()
-    showSuccess.mockReset()
-    showWarning.mockReset()
-    const { adminAPI } = await import('@/api/admin')
-    vi.mocked(adminAPI.accounts.importData).mockReset()
+  beforeEach(() => {
+    vi.resetAllMocks()
   })
 
   it('未选择文件时提示错误', async () => {
-    const wrapper = mountModal()
+    const wrapper = mount(ImportDataModal, {
+      props: { show: true },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
+        }
+      }
+    })
 
     await wrapper.find('form').trigger('submit')
     expect(showError).toHaveBeenCalledWith('admin.accounts.dataImportSelectFile')
   })
 
-  it('无效 JSON 时按文件名提示解析失败', async () => {
-    const { adminAPI } = await import('@/api/admin')
-    const wrapper = mountModal()
+  it('无效 JSON 时提示解析失败', async () => {
+    const wrapper = mount(ImportDataModal, {
+      props: { show: true },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
+        }
+      }
+    })
 
     const input = wrapper.find('input[type="file"]')
-    setInputFiles(input.element, [makeJsonFile('data.json', 'invalid json')])
+    const file = new File(['invalid json'], 'data.json', { type: 'application/json' })
+    Object.defineProperty(file, 'text', {
+      value: () => Promise.resolve('invalid json')
+    })
+    Object.defineProperty(input.element, 'files', {
+      value: [file]
+    })
 
     await input.trigger('change')
     await wrapper.find('form').trigger('submit')
-    await flushPromises()
+    await Promise.resolve()
 
-    expect(showError).toHaveBeenCalledWith('admin.accounts.dataImportParseFailedFile')
-    expect(adminAPI.accounts.importData).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenCalledWith('admin.accounts.dataImportParseFailed')
   })
 
-  it('不是导出数据的 JSON 按文件名拒绝', async () => {
+  it('搜索按钮会筛选现有账号但不导入', async () => {
     const { adminAPI } = await import('@/api/admin')
-    const wrapper = mountModal()
+    const searchMock = adminAPI.accounts.searchData as ReturnType<typeof vi.fn>
+    searchMock.mockResolvedValue({
+      account_candidates: 1,
+      account_matched: 1,
+      account_failed: 0,
+      accounts: [
+        {
+          id: 101,
+          name: 'acc',
+          platform: 'openai',
+          type: 'oauth',
+          status: 'active'
+        }
+      ],
+      errors: []
+    })
+
+    const wrapper = mount(ImportDataModal, {
+      props: { show: true },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
+        }
+      }
+    })
 
     const input = wrapper.find('input[type="file"]')
-    setInputFiles(input.element, [makeJsonFile('random.json', JSON.stringify({ name: 'test' }))])
+    const file = new File([
+      JSON.stringify({
+        type: 'sub2api-data',
+        version: 1,
+        proxies: [],
+        accounts: []
+      })
+    ], 'data.json', { type: 'application/json' })
+    Object.defineProperty(file, 'text', {
+      value: () => Promise.resolve(JSON.stringify({ type: 'sub2api-data', version: 1, proxies: [], accounts: [] }))
+    })
+    Object.defineProperty(input.element, 'files', {
+      value: [file]
+    })
 
     await input.trigger('change')
-    await wrapper.find('form').trigger('submit')
-    await flushPromises()
+    const searchButton = wrapper.findAll('button').find((button) => button.text() === 'admin.accounts.dataSearchButton')
+    expect(searchButton).toBeTruthy()
+    await searchButton!.trigger('click')
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(showError).toHaveBeenCalledWith('admin.accounts.dataImportInvalidFile')
-    expect(adminAPI.accounts.importData).not.toHaveBeenCalled()
+    expect(searchMock).toHaveBeenCalled()
+    expect(showSuccess).toHaveBeenCalledWith('admin.accounts.dataSearchSuccess')
+    expect(showError).not.toHaveBeenCalledWith('admin.accounts.dataImportParseFailed')
   })
 
-  it('无有效 JSON 的选择不清空已有选择', async () => {
+  it('导入完整请求体格式时会提取内层 data 作为数据载荷', async () => {
     const { adminAPI } = await import('@/api/admin')
-    vi.mocked(adminAPI.accounts.importData).mockResolvedValue({
+    const importMock = adminAPI.accounts.importData as ReturnType<typeof vi.fn>
+    importMock.mockResolvedValue({
       proxy_created: 0,
       proxy_reused: 0,
       proxy_failed: 0,
       account_created: 1,
-      account_failed: 0
+      account_updated: 0,
+      account_failed: 0,
+      errors: []
     })
 
-    const wrapper = mountModal()
-    const input = wrapper.find('input[type="file"]')
-
-    const valid = makeJsonFile(
-      'valid.json',
-      JSON.stringify({ exported_at: '2026-07-05T00:00:00Z', proxies: [], accounts: [{ name: 'a' }] })
-    )
-    setInputFiles(input.element, [valid])
-    await input.trigger('change')
-
-    setInputFiles(input.element, [new File(['hello'], 'notes.txt', { type: 'text/plain' })])
-    await input.trigger('change')
-    expect(showError).toHaveBeenCalledWith('admin.accounts.dataImportSelectFile')
-
-    await wrapper.find('form').trigger('submit')
-    await flushPromises()
-
-    expect(adminAPI.accounts.importData).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        accounts: [{ name: 'a' }]
-      }),
+    const payload = {
+      type: 'sub2api-data',
+      version: 1,
+      exported_at: '2026-06-01T09:37:10Z',
+      proxies: [],
+      accounts: [
+        {
+          name: 'acc',
+          platform: 'openai',
+          type: 'oauth',
+          credentials: { access_token: 'token' },
+          extra: { email: 'acc@example.com' },
+          concurrency: 10,
+          priority: 1,
+          rate_multiplier: 1,
+          auto_pause_on_expired: true
+        }
+      ]
+    }
+    const requestPayload = {
+      data: payload,
       skip_default_group_bind: true
+    }
+    const wrapper = mount(ImportDataModal, {
+      props: { show: true },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
+        }
+      }
     })
-  })
-
-  it('merges multiple selected JSON files before importing', async () => {
-    const { adminAPI } = await import('@/api/admin')
-    vi.mocked(adminAPI.accounts.importData).mockResolvedValue({
-      proxy_created: 0,
-      proxy_reused: 0,
-      proxy_failed: 0,
-      account_created: 2,
-      account_failed: 0
-    })
-
-    const wrapper = mountModal()
 
     const input = wrapper.find('input[type="file"]')
-    const first = makeJsonFile(
-      'first.json',
-      JSON.stringify({ exported_at: '2026-07-05T00:00:00Z', proxies: [], accounts: [{ name: 'a' }] })
-    )
-    const second = makeJsonFile(
-      'second.json',
-      JSON.stringify({
-        exported_at: '2026-07-05T00:00:01Z',
-        proxies: [{ proxy_key: 'p' }],
-        accounts: [{ name: 'b' }]
-      })
-    )
-    setInputFiles(input.element, [first, second])
+    const file = new File([JSON.stringify(requestPayload)], 'data.json', { type: 'application/json' })
+    Object.defineProperty(file, 'text', {
+      value: () => Promise.resolve(JSON.stringify(requestPayload))
+    })
+    Object.defineProperty(input.element, 'files', {
+      value: [file]
+    })
 
     await input.trigger('change')
     await wrapper.find('form').trigger('submit')
-    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(adminAPI.accounts.importData).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        proxies: [{ proxy_key: 'p' }],
-        accounts: [{ name: 'a' }, { name: 'b' }]
-      }),
-      skip_default_group_bind: true
+    expect(importMock).toHaveBeenCalledWith({
+      data: payload,
+      skip_default_group_bind: true,
+      update_existing: false,
+      duplicate_account_mode: 'skip'
     })
     expect(showSuccess).toHaveBeenCalledWith('admin.accounts.dataImportSuccess')
   })
 
-  it('部分成功时关闭弹窗仍通知父组件刷新', async () => {
+  it('重复账号错误结果显示覆盖导入按钮并带 update_existing 重试', async () => {
     const { adminAPI } = await import('@/api/admin')
-    vi.mocked(adminAPI.accounts.importData).mockResolvedValue({
-      proxy_created: 0,
-      proxy_reused: 0,
-      proxy_failed: 0,
-      account_created: 1,
-      account_failed: 1
+    const importMock = adminAPI.accounts.importData as ReturnType<typeof vi.fn>
+    importMock
+      .mockResolvedValueOnce({
+        proxy_created: 0,
+        proxy_reused: 0,
+        proxy_failed: 0,
+        account_created: 0,
+        account_updated: 0,
+        account_failed: 1,
+        errors: [
+          {
+            kind: 'account',
+            name: 'existing',
+            message: 'duplicate account already exists: #101 existing'
+          }
+        ]
+      })
+      .mockResolvedValueOnce({
+        proxy_created: 0,
+        proxy_reused: 0,
+        proxy_failed: 0,
+        account_created: 0,
+        account_updated: 1,
+        account_failed: 0,
+        errors: []
+      })
+
+    const payload = { type: 'sub2api-data', version: 1, proxies: [], accounts: [] }
+    const wrapper = mount(ImportDataModal, {
+      props: { show: true },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
+        }
+      }
     })
 
-    const wrapper = mountModal()
     const input = wrapper.find('input[type="file"]')
-    setInputFiles(input.element, [
-      makeJsonFile(
-        'mixed.json',
-        JSON.stringify({
-          exported_at: '2026-07-05T00:00:00Z',
-          proxies: [],
-          accounts: [{ name: 'a' }, { name: 'b' }]
-        })
-      )
-    ])
+    const file = new File([JSON.stringify(payload)], 'data.json', { type: 'application/json' })
+    Object.defineProperty(file, 'text', {
+      value: () => Promise.resolve(JSON.stringify(payload))
+    })
+    Object.defineProperty(input.element, 'files', {
+      value: [file]
+    })
 
     await input.trigger('change')
     await wrapper.find('form').trigger('submit')
-    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(showError).toHaveBeenCalledWith('admin.accounts.dataImportCompletedWithErrors')
-    expect(wrapper.emitted('imported')).toBeUndefined()
+    const overwriteButton = wrapper.findAll('button').find((button) => button.text() === 'admin.accounts.dataImportOverwriteButton')
+    expect(overwriteButton).toBeTruthy()
+    expect(importMock).toHaveBeenCalledWith({
+      data: payload,
+      skip_default_group_bind: true,
+      update_existing: false,
+      duplicate_account_mode: 'skip'
+    })
 
-    // 第二个 btn-secondary 是 footer 的取消按钮(第一个是选择文件)
-    await wrapper.findAll('button.btn-secondary')[1]!.trigger('click')
+    await overwriteButton!.trigger('click')
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(wrapper.emitted('imported')).toHaveLength(1)
-    expect(wrapper.emitted('close')).toHaveLength(1)
+    expect(importMock).toHaveBeenLastCalledWith({
+      data: payload,
+      skip_default_group_bind: true,
+      update_existing: true,
+      duplicate_account_mode: 'overwrite'
+    })
+    expect(showSuccess).toHaveBeenCalledWith('admin.accounts.dataImportSuccess')
+  })
+
+  it('重复账号错误结果显示并存导入按钮并带 coexist 模式重试', async () => {
+    const { adminAPI } = await import('@/api/admin')
+    const importMock = adminAPI.accounts.importData as ReturnType<typeof vi.fn>
+    importMock
+      .mockResolvedValueOnce({
+        proxy_created: 0,
+        proxy_reused: 0,
+        proxy_failed: 0,
+        account_created: 0,
+        account_updated: 0,
+        account_failed: 1,
+        errors: [
+          {
+            kind: 'account',
+            name: 'existing',
+            message: 'duplicate account already exists: #101 existing'
+          }
+        ]
+      })
+      .mockResolvedValueOnce({
+        proxy_created: 0,
+        proxy_reused: 0,
+        proxy_failed: 0,
+        account_created: 1,
+        account_updated: 0,
+        account_failed: 0,
+        errors: []
+      })
+
+    const payload = { type: 'sub2api-data', version: 1, proxies: [], accounts: [] }
+    const wrapper = mount(ImportDataModal, {
+      props: { show: true },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
+        }
+      }
+    })
+
+    const input = wrapper.find('input[type="file"]')
+    const file = new File([JSON.stringify(payload)], 'data.json', { type: 'application/json' })
+    Object.defineProperty(file, 'text', {
+      value: () => Promise.resolve(JSON.stringify(payload))
+    })
+    Object.defineProperty(input.element, 'files', {
+      value: [file]
+    })
+
+    await input.trigger('change')
+    await wrapper.find('form').trigger('submit')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const coexistButton = wrapper.findAll('button').find((button) => button.text() === 'admin.accounts.dataImportCoexistButton')
+    expect(coexistButton).toBeTruthy()
+
+    await coexistButton!.trigger('click')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(importMock).toHaveBeenLastCalledWith({
+      data: payload,
+      skip_default_group_bind: true,
+      update_existing: false,
+      duplicate_account_mode: 'coexist'
+    })
+    expect(showSuccess).toHaveBeenCalledWith('admin.accounts.dataImportSuccess')
   })
 })

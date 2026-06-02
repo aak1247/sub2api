@@ -31,7 +31,7 @@
     <!-- Error Info Indicator -->
     <div v-if="hasError && account.error_message" class="group/error relative">
       <svg
-        class="h-4 w-4 cursor-help text-red-500 transition-colors hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
+        :class="['h-4 w-4 cursor-help transition-colors', errorInfoIconClass]"
         fill="none"
         viewBox="0 0 24 24"
         stroke="currentColor"
@@ -274,7 +274,14 @@ const isTempUnschedulable = computed(() => {
 
 // Computed: has error status
 const hasError = computed(() => {
-  return props.account.status === 'error'
+  return props.account.status === 'error' || props.account.status === 'refreshed'
+})
+
+const errorInfoIconClass = computed(() => {
+  if (props.account.status === 'refreshed') {
+    return 'text-amber-500 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300'
+  }
+  return 'text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300'
 })
 
 const isQuotaExceeded = computed(() => {
@@ -305,7 +312,7 @@ const overloadCountdown = computed(() => {
 // Computed: status badge class
 const statusClass = computed(() => {
   if (hasError.value) {
-    return 'badge-danger'
+    return props.account.status === 'refreshed' ? 'badge-warning' : 'badge-danger'
   }
   if (isTempUnschedulable.value) {
     return 'badge-warning'
@@ -325,7 +332,7 @@ const statusClass = computed(() => {
 // Computed: status text
 const statusText = computed(() => {
   if (hasError.value) {
-    return t('admin.accounts.status.error')
+    return t(`admin.accounts.status.${props.account.status}`)
   }
   if (isTempUnschedulable.value) {
     return t('admin.accounts.status.tempUnschedulable')

@@ -19,23 +19,13 @@
       <div>
         <label class="input-label">{{ t('admin.accounts.dataImportFile') }}</label>
         <div
-          class="flex items-center justify-between gap-3 rounded-lg border border-dashed px-4 py-3 transition-colors"
-          :class="dragActive
-            ? 'border-primary-400 bg-primary-50/70 dark:border-primary-500 dark:bg-primary-900/20'
-            : 'border-gray-300 bg-gray-50 dark:border-dark-600 dark:bg-dark-800'"
-          @dragenter.prevent="handleDragEnter"
-          @dragover.prevent
-          @dragleave.prevent="handleDragLeave"
-          @drop.prevent="handleDrop"
+          class="flex items-center justify-between gap-3 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-3 dark:border-dark-600 dark:bg-dark-800"
         >
           <div class="min-w-0">
-            <div class="truncate text-sm text-gray-700 dark:text-dark-200" :title="fileListTitle">
-              {{ selectedFilesLabel || t('admin.accounts.dataImportSelectFile') }}
+            <div class="truncate text-sm text-gray-700 dark:text-dark-200">
+              {{ fileName || t('admin.accounts.dataImportSelectFile') }}
             </div>
-            <div class="text-xs text-gray-500 dark:text-dark-400">
-              JSON (.json)
-              <span v-if="files.length > 1"> · {{ fileListTitle }}</span>
-            </div>
+            <div class="text-xs text-gray-500 dark:text-dark-400">JSON (.json)</div>
           </div>
           <button type="button" class="btn btn-secondary shrink-0" @click="openFilePicker">
             {{ t('common.chooseFile') }}
@@ -46,31 +36,110 @@
           type="file"
           class="hidden"
           accept="application/json,.json"
-          multiple
           @change="handleFileChange"
         />
       </div>
 
       <div
-        v-if="result"
+        v-if="searchResult"
+        class="space-y-2 rounded-xl border border-blue-200 p-4 dark:border-blue-900/60"
+      >
+        <div class="text-sm font-medium text-gray-900 dark:text-white">
+          {{ t('admin.accounts.dataSearchResult') }}
+        </div>
+        <div class="text-sm text-gray-700 dark:text-dark-300">
+          {{ t('admin.accounts.dataSearchResultSummary', searchResult) }}
+        </div>
+
+        <div v-if="duplicateGroups.length" class="mt-2">
+          <div class="text-sm font-medium text-amber-700 dark:text-amber-300">
+            {{ t('admin.accounts.duplicateAccountGroups') }}
+          </div>
+          <div class="mt-2 max-h-56 space-y-2 overflow-auto rounded-lg bg-gray-50 p-3 text-xs dark:bg-dark-800">
+            <div
+              v-for="(group, idx) in duplicateGroups"
+              :key="group.identity_key || idx"
+              class="rounded-md border border-amber-200 bg-amber-50 p-2 dark:border-amber-800 dark:bg-amber-900/20"
+            >
+              <div class="font-medium text-amber-800 dark:text-amber-200">
+                {{ t('admin.accounts.duplicateAccountReason', { reason: group.reason, count: group.accounts.length }) }}
+              </div>
+              <div class="mt-1 space-y-0.5 text-gray-700 dark:text-dark-200">
+                <div v-for="account in group.accounts" :key="account.id">
+                  #{{ account.id }} · {{ account.name }} · {{ account.platform }} · {{ account.type }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="searchAccounts.length" class="mt-2">
+          <div class="text-sm font-medium text-gray-700 dark:text-dark-200">
+            {{ t('admin.accounts.dataSearchAccounts') }}
+          </div>
+          <div class="mt-2 max-h-48 overflow-auto rounded-lg bg-gray-50 p-3 text-xs dark:bg-dark-800">
+            <div v-for="(item, idx) in searchAccounts" :key="idx" class="whitespace-pre-wrap">
+              #{{ item.id }} · {{ item.name }} · {{ item.platform }} · {{ item.type }}
+            </div>
+          </div>
+        </div>
+
+        <div v-if="searchErrors.length" class="mt-2">
+          <div class="text-sm font-medium text-red-600 dark:text-red-400">
+            {{ t('admin.accounts.dataSearchErrors') }}
+          </div>
+          <div class="mt-2 max-h-48 overflow-auto rounded-lg bg-gray-50 p-3 font-mono text-xs dark:bg-dark-800">
+            <div v-for="(item, idx) in searchErrors" :key="idx" class="whitespace-pre-wrap">
+              {{ item.kind }} {{ item.name || item.proxy_key || '-' }} — {{ item.message }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-if="importResult"
         class="space-y-2 rounded-xl border border-gray-200 p-4 dark:border-dark-700"
       >
         <div class="text-sm font-medium text-gray-900 dark:text-white">
           {{ t('admin.accounts.dataImportResult') }}
         </div>
         <div class="text-sm text-gray-700 dark:text-dark-300">
-          {{ t('admin.accounts.dataImportResultSummary', result) }}
+          {{ t('admin.accounts.dataImportResultSummary', importResult) }}
         </div>
 
-        <div v-if="errorItems.length" class="mt-2">
+        <div v-if="importErrors.length" class="mt-2">
           <div class="text-sm font-medium text-red-600 dark:text-red-400">
             {{ t('admin.accounts.dataImportErrors') }}
           </div>
-          <div
-            class="mt-2 max-h-48 overflow-auto rounded-lg bg-gray-50 p-3 font-mono text-xs dark:bg-dark-800"
-          >
-            <div v-for="(item, idx) in errorItems" :key="idx" class="whitespace-pre-wrap">
+          <div class="mt-2 max-h-48 overflow-auto rounded-lg bg-gray-50 p-3 font-mono text-xs dark:bg-dark-800">
+            <div v-for="(item, idx) in importErrors" :key="idx" class="whitespace-pre-wrap">
               {{ item.kind }} {{ item.name || item.proxy_key || '-' }} — {{ item.message }}
+            </div>
+          </div>
+          <div
+            v-if="canOverwriteImport"
+            class="mt-3 flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-800 dark:bg-amber-900/20 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div class="text-xs text-amber-700 dark:text-amber-300">
+              {{ t('admin.accounts.dataImportDuplicateHint') }}
+            </div>
+            <div class="flex flex-wrap justify-end gap-2">
+              <button
+                class="btn btn-secondary shrink-0"
+                type="button"
+                :disabled="busy"
+                @click="handleCoexistImport"
+              >
+                {{ importing ? t('admin.accounts.dataImporting') : t('admin.accounts.dataImportCoexistButton') }}
+              </button>
+              <button
+                class="btn btn-primary shrink-0"
+                type="button"
+                :disabled="busy"
+                @click="handleOverwriteImport"
+              >
+                {{ importing ? t('admin.accounts.dataImporting') : t('admin.accounts.dataImportOverwriteButton') }}
+              </button>
             </div>
           </div>
         </div>
@@ -78,18 +147,23 @@
     </form>
 
     <template #footer>
-      <div class="flex justify-end gap-3">
-        <button class="btn btn-secondary" type="button" :disabled="importing" @click="handleClose">
+      <div class="flex w-full items-center justify-between gap-3">
+        <button class="btn btn-secondary" type="button" :disabled="busy" @click="handleClose">
           {{ t('common.cancel') }}
         </button>
-        <button
-          class="btn btn-primary"
-          type="submit"
-          form="import-data-form"
-          :disabled="importing"
-        >
-          {{ importing ? t('admin.accounts.dataImporting') : t('admin.accounts.dataImportButton') }}
-        </button>
+        <div class="flex gap-3">
+          <button class="btn btn-secondary" type="button" :disabled="busy" @click="handleSearch">
+            {{ searching ? t('admin.accounts.dataSearching') : t('admin.accounts.dataSearchButton') }}
+          </button>
+          <button
+            class="btn btn-primary"
+            type="submit"
+            form="import-data-form"
+            :disabled="busy"
+          >
+            {{ importing ? t('admin.accounts.dataImporting') : t('admin.accounts.dataImportButton') }}
+          </button>
+        </div>
       </div>
     </template>
   </BaseDialog>
@@ -101,7 +175,13 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
-import type { AdminDataImportResult, AdminDataPayload } from '@/types'
+import type {
+  Account,
+  AdminDataDuplicateAccountMode,
+  AdminDataImportResult,
+  AdminDataPayload,
+  AdminDataSearchResult
+} from '@/types'
 
 interface Props {
   show: boolean
@@ -110,6 +190,7 @@ interface Props {
 interface Emits {
   (e: 'close'): void
   (e: 'imported'): void
+  (e: 'searched', accounts: Account[], result: AdminDataSearchResult): void
 }
 
 const props = defineProps<Props>()
@@ -119,30 +200,29 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const importing = ref(false)
-const files = ref<File[]>([])
-const dragDepth = ref(0)
-const dragActive = computed(() => dragDepth.value > 0)
-const hasCreatedData = ref(false)
-const result = ref<AdminDataImportResult | null>(null)
+const searching = ref(false)
+const file = ref<File | null>(null)
+const importResult = ref<AdminDataImportResult | null>(null)
+const searchResult = ref<AdminDataSearchResult | null>(null)
 
 const fileInput = ref<HTMLInputElement | null>(null)
-const selectedFilesLabel = computed(() => {
-  if (files.value.length === 0) return ''
-  if (files.value.length === 1) return files.value[0]?.name || ''
-  return t('admin.accounts.selectedCount', { count: files.value.length })
-})
-const fileListTitle = computed(() => files.value.map((item) => item.name).join(', '))
-
-const errorItems = computed(() => result.value?.errors || [])
+const fileName = computed(() => file.value?.name || '')
+const busy = computed(() => importing.value || searching.value)
+const importErrors = computed(() => importResult.value?.errors || [])
+const searchAccounts = computed(() => searchResult.value?.accounts || [])
+const searchErrors = computed(() => searchResult.value?.errors || [])
+const duplicateGroups = computed(() => searchResult.value?.duplicates || [])
+const canOverwriteImport = computed(() => importErrors.value.some((item) => (
+  item.kind === 'account' && item.message.includes('duplicate account already exists')
+)))
 
 watch(
   () => props.show,
   (open) => {
     if (open) {
-      files.value = []
-      dragDepth.value = 0
-      hasCreatedData.value = false
-      result.value = null
+      file.value = null
+      importResult.value = null
+      searchResult.value = null
       if (fileInput.value) {
         fileInput.value.value = ''
       }
@@ -156,54 +236,12 @@ const openFilePicker = () => {
 
 const handleFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement
-  setSelectedFiles(target.files)
-  target.value = ''
+  file.value = target.files?.[0] || null
 }
 
 const handleClose = () => {
-  if (importing.value) return
-  if (hasCreatedData.value) {
-    hasCreatedData.value = false
-    emit('imported')
-  }
+  if (busy.value) return
   emit('close')
-}
-
-const isJsonFile = (sourceFile: File) => {
-  const name = sourceFile.name.toLowerCase()
-  return name.endsWith('.json') || sourceFile.type === 'application/json'
-}
-
-const setSelectedFiles = (sourceFiles: FileList | File[] | null | undefined) => {
-  if (importing.value) return
-  const incoming = Array.from(sourceFiles || [])
-  const picked = incoming.filter(isJsonFile)
-  if (!picked.length) {
-    appStore.showError(t('admin.accounts.dataImportSelectFile'))
-    return
-  }
-  if (picked.length < incoming.length) {
-    appStore.showWarning(
-      t('admin.accounts.dataImportIgnoredFiles', { count: incoming.length - picked.length })
-    )
-  }
-  files.value = picked
-  result.value = null
-}
-
-const handleDragEnter = () => {
-  if (importing.value) return
-  dragDepth.value += 1
-}
-
-const handleDragLeave = () => {
-  dragDepth.value = Math.max(0, dragDepth.value - 1)
-}
-
-const handleDrop = (event: DragEvent) => {
-  dragDepth.value = 0
-  if (importing.value) return
-  setSelectedFiles(event.dataTransfer?.files)
 }
 
 const readFileAsText = async (sourceFile: File): Promise<string> => {
@@ -224,103 +262,114 @@ const readFileAsText = async (sourceFile: File): Promise<string> => {
   })
 }
 
-const SUPPORTED_DATA_TYPES = ['sub2api-data', 'sub2api-bundle']
-const SUPPORTED_DATA_VERSION = 1
-
-// 与后端 validateDataHeader 对齐:合并前逐文件校验,避免坏文件混入合并 payload 后
-// 报错无法定位来源,或绕过后端本会对单文件做的 type/version 检查。
-const isValidDataPayload = (payload: unknown): payload is AdminDataPayload => {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false
-  const candidate = payload as Record<string, unknown>
-  if (
-    candidate.type !== undefined &&
-    candidate.type !== '' &&
-    !SUPPORTED_DATA_TYPES.includes(candidate.type as string)
-  ) {
-    return false
+const readPayload = async () => {
+  if (!file.value) {
+    throw new Error('file_required')
   }
+  const text = await readFileAsText(file.value)
+  const parsed = JSON.parse(text) as unknown
   if (
-    candidate.version !== undefined &&
-    candidate.version !== 0 &&
-    candidate.version !== SUPPORTED_DATA_VERSION
+    parsed &&
+    typeof parsed === 'object' &&
+    !Array.isArray(parsed) &&
+    'data' in parsed &&
+    (parsed as { data?: unknown }).data &&
+    typeof (parsed as { data?: unknown }).data === 'object' &&
+    !Array.isArray((parsed as { data?: unknown }).data)
   ) {
-    return false
+    return (parsed as { data: AdminDataPayload }).data
   }
-  return Array.isArray(candidate.proxies) && Array.isArray(candidate.accounts)
+  return parsed as AdminDataPayload
 }
 
-const mergeDataPayloads = (payloads: AdminDataPayload[]): AdminDataPayload => {
-  const [firstPayload] = payloads
-  if (payloads.length === 1 && firstPayload) return firstPayload
+const handleSearch = async () => {
+  if (!file.value) {
+    appStore.showError(t('admin.accounts.dataImportSelectFile'))
+    return
+  }
 
-  return {
-    type: payloads.find((item) => typeof item.type === 'string')?.type,
-    version: payloads.find((item) => typeof item.version === 'number')?.version,
-    exported_at: new Date().toISOString(),
-    proxies: payloads.flatMap((item) => item.proxies),
-    accounts: payloads.flatMap((item) => item.accounts),
-    skipped_shadows: payloads.reduce((sum, item) => {
-      const count = Number(item.skipped_shadows || 0)
-      return Number.isFinite(count) ? sum + count : sum
-    }, 0)
+  searching.value = true
+  try {
+    const dataPayload = await readPayload()
+    const res = await adminAPI.accounts.searchData({ data: dataPayload })
+    searchResult.value = res
+    emit('searched', res.accounts || [], res)
+
+    const msgParams: Record<string, unknown> = {
+      account_candidates: res.account_candidates,
+      account_matched: res.account_matched,
+      account_failed: res.account_failed,
+      duplicate_groups: res.duplicates?.length || 0,
+    }
+    if (res.account_failed > 0 || (res.duplicates?.length || 0) > 0) {
+      appStore.showWarning(t('admin.accounts.dataSearchCompletedWithErrors', msgParams))
+    } else {
+      appStore.showSuccess(t('admin.accounts.dataSearchSuccess', msgParams))
+    }
+  } catch (error: any) {
+    if (error instanceof SyntaxError) {
+      appStore.showError(t('admin.accounts.dataImportParseFailed'))
+    } else {
+      appStore.showError(error?.message || t('admin.accounts.dataImportFailed'))
+    }
+  } finally {
+    searching.value = false
   }
 }
 
-const handleImport = async () => {
-  if (files.value.length === 0) {
+const runImport = async (duplicateAccountMode: AdminDataDuplicateAccountMode) => {
+  if (!file.value) {
     appStore.showError(t('admin.accounts.dataImportSelectFile'))
     return
   }
 
   importing.value = true
   try {
-    const dataPayloads: AdminDataPayload[] = []
-    for (const sourceFile of files.value) {
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(await readFileAsText(sourceFile))
-      } catch {
-        appStore.showError(
-          t('admin.accounts.dataImportParseFailedFile', { name: sourceFile.name })
-        )
-        return
-      }
-      if (!isValidDataPayload(parsed)) {
-        appStore.showError(t('admin.accounts.dataImportInvalidFile', { name: sourceFile.name }))
-        return
-      }
-      dataPayloads.push(parsed)
-    }
-    const dataPayload = mergeDataPayloads(dataPayloads)
+    const dataPayload = await readPayload()
 
     const res = await adminAPI.accounts.importData({
       data: dataPayload,
-      skip_default_group_bind: true
+      skip_default_group_bind: true,
+      update_existing: duplicateAccountMode === 'overwrite',
+      duplicate_account_mode: duplicateAccountMode
     })
 
-    result.value = res
+    importResult.value = res
 
     const msgParams: Record<string, unknown> = {
       account_created: res.account_created,
+      account_updated: res.account_updated || 0,
       account_failed: res.account_failed,
       proxy_created: res.proxy_created,
       proxy_reused: res.proxy_reused,
       proxy_failed: res.proxy_failed,
     }
     if (res.account_failed > 0 || res.proxy_failed > 0) {
-      // 部分成功也创建了数据;弹窗关闭时通过 imported 通知父组件刷新列表
-      if (res.account_created > 0 || res.proxy_created > 0) {
-        hasCreatedData.value = true
-      }
       appStore.showError(t('admin.accounts.dataImportCompletedWithErrors', msgParams))
     } else {
       appStore.showSuccess(t('admin.accounts.dataImportSuccess', msgParams))
       emit('imported')
     }
   } catch (error: any) {
-    appStore.showError(error?.message || t('admin.accounts.dataImportFailed'))
+    if (error instanceof SyntaxError) {
+      appStore.showError(t('admin.accounts.dataImportParseFailed'))
+    } else {
+      appStore.showError(error?.message || t('admin.accounts.dataImportFailed'))
+    }
   } finally {
     importing.value = false
   }
+}
+
+const handleImport = async () => {
+  await runImport('skip')
+}
+
+const handleOverwriteImport = async () => {
+  await runImport('overwrite')
+}
+
+const handleCoexistImport = async () => {
+  await runImport('coexist')
 }
 </script>

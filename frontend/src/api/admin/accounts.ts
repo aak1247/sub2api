@@ -16,6 +16,8 @@ import type {
   TempUnschedulableStatus,
   AdminDataPayload,
   AdminDataImportResult,
+  AdminDataDuplicateAccountMode,
+  AdminDataSearchResult,
   CodexSessionImportRequest,
   CodexSessionImportResult,
   OpenAICodexPATCreateRequest,
@@ -120,6 +122,30 @@ export async function listWithEtag(
     etag: etagHeader,
     data: response.data
   }
+}
+
+export interface AccountIDListResponse {
+  ids: number[]
+  total: number
+}
+
+export type AccountListFilters = {
+  platform?: string
+  type?: string
+  status?: string
+  group?: string
+  search?: string
+  privacy_mode?: string
+  lite?: string
+  sort_by?: string
+  sort_order?: 'asc' | 'desc'
+}
+
+export async function listIds(filters?: AccountListFilters): Promise<AccountIDListResponse> {
+  const { data } = await apiClient.get<AccountIDListResponse>('/admin/accounts/ids', {
+    params: filters
+  })
+  return data
 }
 
 /**
@@ -652,11 +678,29 @@ export async function exportData(options?: {
 export async function importData(payload: {
   data: AdminDataPayload
   skip_default_group_bind?: boolean
+  update_existing?: boolean
+  duplicate_account_mode?: AdminDataDuplicateAccountMode
 }): Promise<AdminDataImportResult> {
   const { data } = await apiClient.post<AdminDataImportResult>('/admin/accounts/data', {
     data: payload.data,
-    skip_default_group_bind: payload.skip_default_group_bind
+    skip_default_group_bind: payload.skip_default_group_bind,
+    update_existing: payload.update_existing,
+    duplicate_account_mode: payload.duplicate_account_mode
   })
+  return data
+}
+
+export async function searchData(payload: {
+  data: AdminDataPayload
+}): Promise<AdminDataSearchResult> {
+  const { data } = await apiClient.post<AdminDataSearchResult>('/admin/accounts/data/search', {
+    data: payload.data
+  })
+  return data
+}
+
+export async function checkDuplicates(): Promise<AdminDataSearchResult> {
+  const { data } = await apiClient.get<AdminDataSearchResult>('/admin/accounts/duplicates')
   return data
 }
 
@@ -973,6 +1017,7 @@ export async function refreshOllamaCloudUsage(id: number): Promise<OllamaCloudUs
 export const accountsAPI = {
   list,
   listWithEtag,
+  listIds,
   getById,
   create,
   duplicate,
@@ -1007,6 +1052,8 @@ export const accountsAPI = {
   syncFromCrs,
   exportData,
   importData,
+  searchData,
+  checkDuplicates,
   importCodexSession,
   createOpenAICodexPAT,
   getAntigravityDefaultModelMapping,

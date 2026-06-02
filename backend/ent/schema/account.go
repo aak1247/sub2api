@@ -113,7 +113,7 @@ func (Account) Fields() []ent.Field {
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
 			Default(1.0),
 
-		// status: 账户状态，如 "active", "error", "disabled"
+		// status: 账户状态，如 "active", "error", "refreshed", "disabled"
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusActive),

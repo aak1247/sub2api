@@ -18,10 +18,13 @@ import (
 )
 
 const (
-	dataType       = "sub2api-data"
-	legacyDataType = "sub2api-bundle"
-	dataVersion    = 1
-	dataPageCap    = 1000
+	dataType                          = "sub2api-data"
+	legacyDataType                    = "sub2api-bundle"
+	dataVersion                       = 1
+	dataPageCap                       = 1000
+	dataDuplicateAccountModeSkip      = "skip"
+	dataDuplicateAccountModeOverwrite = "overwrite"
+	dataDuplicateAccountModeCoexist   = "coexist"
 )
 
 type DataPayload struct {
@@ -30,33 +33,22 @@ type DataPayload struct {
 	ExportedAt string        `json:"exported_at"`
 	Proxies    []DataProxy   `json:"proxies"`
 	Accounts   []DataAccount `json:"accounts"`
-	// SkippedShadows 记录导出时被排除的 spark 影子账号数量(见 ExportData)。仅作可见性提示,
-	// 导入侧忽略该字段;omitempty 保持向后兼容。
-	SkippedShadows int `json:"skipped_shadows,omitempty"`
 }
 
 type DataProxy struct {
-	ProxyKey        string `json:"proxy_key"`
-	Name            string `json:"name"`
-	Protocol        string `json:"protocol"`
-	Host            string `json:"host"`
-	Port            int    `json:"port"`
-	Username        string `json:"username,omitempty"`
-	Password        string `json:"password,omitempty"`
-	Status          string `json:"status"`
-	ExpiresAt       *int64 `json:"expires_at,omitempty"`        // unix 秒，与 DataAccount.ExpiresAt 风格一致
-	FallbackMode    string `json:"fallback_mode,omitempty"`     // none/direct/proxy
-	BackupProxyName string `json:"backup_proxy_name,omitempty"` // 备用代理 name（跨实例按 name 反查）
-	ExpiryWarnDays  int    `json:"expiry_warn_days,omitempty"`
+	ProxyKey string `json:"proxy_key"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	Status   string `json:"status"`
 }
 
 // DataAccount 是管理员显式备份导出使用的账号结构，故意不走 dto.Account 的脱敏路径，
 // Credentials 原文返回。这是"管理员备份"这一显式行为的一部分；如未来需要导出脱敏版本，
 // 应新增独立结构而非修改这里。
-// 注意:本结构不含 parent_account_id/quota_dimension——spark 影子账号在 ExportData 处被显式
-// 排除(影子不持凭据、通用凭据型导入强制 credentials 非空无法重建父子链接),不在此表达。
-// 影子的独立调度配置(priority/并发/分组/status 管理员可单独调)亦不在本备份范围,属已知局限
-// (外审第6轮裁决:保持排除 + 前端警告,而非升级格式做完整往返)。
 type DataAccount struct {
 	Name               string         `json:"name"`
 	Notes              *string        `json:"notes,omitempty"`
@@ -75,6 +67,12 @@ type DataAccount struct {
 type DataImportRequest struct {
 	Data                 DataPayload `json:"data"`
 	SkipDefaultGroupBind *bool       `json:"skip_default_group_bind"`
+	UpdateExisting       *bool       `json:"update_existing"`
+	DuplicateAccountMode string      `json:"duplicate_account_mode"`
+}
+
+type DataSearchRequest struct {
+	Data DataPayload `json:"data"`
 }
 
 type DataImportResult struct {
@@ -82,8 +80,18 @@ type DataImportResult struct {
 	ProxyReused    int               `json:"proxy_reused"`
 	ProxyFailed    int               `json:"proxy_failed"`
 	AccountCreated int               `json:"account_created"`
+	AccountUpdated int               `json:"account_updated"`
 	AccountFailed  int               `json:"account_failed"`
 	Errors         []DataImportError `json:"errors,omitempty"`
+}
+
+type DataSearchResult struct {
+	AccountCandidates int                      `json:"account_candidates"`
+	AccountMatched    int                      `json:"account_matched"`
+	AccountFailed     int                      `json:"account_failed"`
+	Accounts          []AccountWithConcurrency `json:"accounts,omitempty"`
+	Duplicates        []AccountDuplicateGroup  `json:"duplicates,omitempty"`
+	Errors            []DataImportError        `json:"errors,omitempty"`
 }
 
 type DataImportError struct {
@@ -91,6 +99,12 @@ type DataImportError struct {
 	Name     string `json:"name,omitempty"`
 	ProxyKey string `json:"proxy_key,omitempty"`
 	Message  string `json:"message"`
+}
+
+type AccountDuplicateGroup struct {
+	Reason      string                   `json:"reason"`
+	IdentityKey string                   `json:"identity_key,omitempty"`
+	Accounts    []AccountWithConcurrency `json:"accounts"`
 }
 
 func buildProxyKey(protocol, host string, port int, username, password string) string {
@@ -112,24 +126,6 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 		return
 	}
 
-	// 排除 spark 影子账号:影子不持凭据,通用凭据型导出无法表达父子链接、导入侧又强制 credentials
-	// 非空——若混入会产出无法还原的坏备份(导入即失败)。影子的独立调度配置(priority/并发/分组/
-	// status,管理员可单独调)随之不进备份,还原后需在重建的影子上重新调优;前端按 skipped_shadows
-	// 提示用户(外审第5轮发现、第6轮裁决:保持排除 + 警告,不做完整往返)。
-	skippedShadows := 0
-	exportable := make([]service.Account, 0, len(accounts))
-	for i := range accounts {
-		if accounts[i].IsCredentialShadow() {
-			skippedShadows++
-			continue
-		}
-		exportable = append(exportable, accounts[i])
-	}
-	accounts = exportable
-	if skippedShadows > 0 {
-		slog.Info("export_skipped_spark_shadows", "count", skippedShadows)
-	}
-
 	includeProxies, err := parseIncludeProxies(c)
 	if err != nil {
 		response.BadRequest(c, err.Error())
@@ -147,41 +143,21 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 		proxies = []service.Proxy{}
 	}
 
-	// 构建 id→name 映射，用于导出备用代理 name
-	proxyNameByID := make(map[int64]string, len(proxies))
-	for i := range proxies {
-		proxyNameByID[proxies[i].ID] = proxies[i].Name
-	}
-
 	proxyKeyByID := make(map[int64]string, len(proxies))
 	dataProxies := make([]DataProxy, 0, len(proxies))
 	for i := range proxies {
 		p := proxies[i]
 		key := buildProxyKey(p.Protocol, p.Host, p.Port, p.Username, p.Password)
 		proxyKeyByID[p.ID] = key
-
-		var expiresAt *int64
-		if p.ExpiresAt != nil {
-			v := p.ExpiresAt.Unix()
-			expiresAt = &v
-		}
-		var backupProxyName string
-		if p.BackupProxyID != nil {
-			backupProxyName = proxyNameByID[*p.BackupProxyID]
-		}
 		dataProxies = append(dataProxies, DataProxy{
-			ProxyKey:        key,
-			Name:            p.Name,
-			Protocol:        p.Protocol,
-			Host:            p.Host,
-			Port:            p.Port,
-			Username:        p.Username,
-			Password:        p.Password,
-			Status:          p.Status,
-			ExpiresAt:       expiresAt,
-			FallbackMode:    p.FallbackMode,
-			BackupProxyName: backupProxyName,
-			ExpiryWarnDays:  p.ExpiryWarnDays,
+			ProxyKey: key,
+			Name:     p.Name,
+			Protocol: p.Protocol,
+			Host:     p.Host,
+			Port:     p.Port,
+			Username: p.Username,
+			Password: p.Password,
+			Status:   p.Status,
 		})
 	}
 
@@ -216,10 +192,9 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 	}
 
 	payload := DataPayload{
-		ExportedAt:     time.Now().UTC().Format(time.RFC3339),
-		Proxies:        dataProxies,
-		Accounts:       dataAccounts,
-		SkippedShadows: skippedShadows,
+		ExportedAt: time.Now().UTC().Format(time.RFC3339),
+		Proxies:    dataProxies,
+		Accounts:   dataAccounts,
 	}
 
 	response.Success(c, payload)
@@ -232,7 +207,11 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 		return
 	}
 
-	if err := validateDataHeader(req.Data); err != nil {
+	if err := validateAccountDataPayload(req.Data); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	if _, err := resolveDataDuplicateAccountMode(req); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
@@ -242,11 +221,230 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 	})
 }
 
+func (h *AccountHandler) SearchData(c *gin.Context) {
+	var req DataSearchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	if err := validateAccountDataPayload(req.Data); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	result, err := h.searchData(c.Request.Context(), req)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, result)
+}
+
+func (h *AccountHandler) CheckDuplicates(c *gin.Context) {
+	result, err := h.checkDuplicates(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, result)
+}
+
+func (h *AccountHandler) searchData(ctx context.Context, req DataSearchRequest) (DataSearchResult, error) {
+	dataPayload := req.Data
+	result := DataSearchResult{}
+	candidateKeys := make(map[string]struct{}, len(dataPayload.Accounts))
+	candidateIdentityKeys := make(map[string]struct{}, len(dataPayload.Accounts))
+
+	for i := range dataPayload.Accounts {
+		item := dataPayload.Accounts[i]
+		if err := validateDataAccount(item); err != nil {
+			result.AccountFailed++
+			result.Errors = append(result.Errors, DataImportError{
+				Kind:    "account",
+				Name:    item.Name,
+				Message: err.Error(),
+			})
+			continue
+		}
+
+		enrichCredentialsFromIDToken(&item)
+		key := dataAccountSearchKey(item.Name, item.Platform, item.Type)
+		if _, ok := candidateKeys[key]; !ok {
+			candidateKeys[key] = struct{}{}
+			result.AccountCandidates++
+		}
+		if identityKey := dataAccountNameIdentityKey(item.Name); identityKey != "" {
+			candidateIdentityKeys[identityKey] = struct{}{}
+		}
+	}
+
+	if len(candidateKeys) == 0 {
+		return result, nil
+	}
+
+	existingAccounts, err := h.listAccountsFiltered(ctx, "", "", "", "", 0, "", "name", "asc")
+	if err != nil {
+		return result, err
+	}
+
+	for i := range existingAccounts {
+		acc := existingAccounts[i]
+		key := dataAccountSearchKey(acc.Name, acc.Platform, acc.Type)
+		_, nameMatched := candidateKeys[key]
+		identityMatched := false
+		if identityKey := dataAccountNameIdentityKey(acc.Name); identityKey != "" {
+			_, identityMatched = candidateIdentityKeys[identityKey]
+		}
+		if !nameMatched && !identityMatched {
+			continue
+		}
+		account := acc
+		result.Accounts = append(result.Accounts, h.buildAccountResponseWithRuntime(ctx, &account))
+	}
+	result.AccountMatched = len(result.Accounts)
+
+	return result, nil
+}
+
+func (h *AccountHandler) checkDuplicates(ctx context.Context) (DataSearchResult, error) {
+	accounts, err := h.listAccountsFiltered(ctx, "", "", "", "", 0, "", "name", "asc")
+	if err != nil {
+		return DataSearchResult{}, err
+	}
+	return h.buildDuplicateResult(ctx, accounts), nil
+}
+
+func dataAccountSearchKey(name, platform, accountType string) string {
+	return strings.ToLower(strings.TrimSpace(name)) + "\x00" + strings.ToLower(strings.TrimSpace(platform)) + "\x00" + strings.ToLower(strings.TrimSpace(accountType))
+}
+
+type dataAccountIndex struct {
+	accountsByKey map[string]service.Account
+}
+
+func buildDataAccountIndex(accounts []service.Account) *dataAccountIndex {
+	index := &dataAccountIndex{accountsByKey: map[string]service.Account{}}
+	for _, account := range accounts {
+		index.Add(account)
+	}
+	return index
+}
+
+func (i *dataAccountIndex) Add(account service.Account) {
+	if i == nil {
+		return
+	}
+	if i.accountsByKey == nil {
+		i.accountsByKey = map[string]service.Account{}
+	}
+	key := dataAccountNameIdentityKey(account.Name)
+	if key != "" {
+		if _, exists := i.accountsByKey[key]; !exists {
+			i.accountsByKey[key] = account
+		}
+	}
+}
+
+func (i *dataAccountIndex) Find(keys []string) *service.Account {
+	if i == nil {
+		return nil
+	}
+	for _, key := range keys {
+		if account, ok := i.accountsByKey[key]; ok {
+			return &account
+		}
+	}
+	return nil
+}
+
+func dataAccountNameIdentityKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	return "name:" + name
+}
+
+func firstSeenDataAccountIdentity(seen map[string]int, key string) (int, bool) {
+	if key == "" {
+		return 0, false
+	}
+	index, ok := seen[key]
+	return index, ok
+}
+
+func markDataAccountIdentitySeen(seen map[string]int, key string, index int) {
+	if key != "" {
+		seen[key] = index
+	}
+}
+
+func (h *AccountHandler) buildDuplicateResult(ctx context.Context, accounts []service.Account) DataSearchResult {
+	result := DataSearchResult{AccountCandidates: len(accounts)}
+	groups := map[string][]service.Account{}
+	for _, account := range accounts {
+		if key := dataAccountNameIdentityKey(account.Name); key != "" {
+			groups[key] = append(groups[key], account)
+		}
+	}
+
+	seenAccountIDs := map[int64]struct{}{}
+	for key, group := range groups {
+		if len(group) < 2 {
+			continue
+		}
+		duplicateGroup := AccountDuplicateGroup{
+			Reason:   dataAccountDuplicateReason(key),
+			Accounts: make([]AccountWithConcurrency, 0, len(group)),
+		}
+		for i := range group {
+			account := group[i]
+			duplicateGroup.Accounts = append(duplicateGroup.Accounts, h.buildAccountResponseWithRuntime(ctx, &account))
+			seenAccountIDs[account.ID] = struct{}{}
+		}
+		result.Duplicates = append(result.Duplicates, duplicateGroup)
+	}
+	result.AccountMatched = len(seenAccountIDs)
+	return result
+}
+
+func dataAccountDuplicateReason(identityKey string) string {
+	if strings.HasPrefix(identityKey, "name:") {
+		return "name"
+	}
+	return "identity"
+}
+
+func resolveDataDuplicateAccountMode(req DataImportRequest) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(req.DuplicateAccountMode))
+	if mode == "" {
+		if req.UpdateExisting != nil && *req.UpdateExisting {
+			return dataDuplicateAccountModeOverwrite, nil
+		}
+		return dataDuplicateAccountModeSkip, nil
+	}
+	switch mode {
+	case dataDuplicateAccountModeSkip, dataDuplicateAccountModeOverwrite, dataDuplicateAccountModeCoexist:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("duplicate_account_mode is invalid: %s", req.DuplicateAccountMode)
+	}
+}
+
 func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) (DataImportResult, error) {
 	skipDefaultGroupBind := true
 	if req.SkipDefaultGroupBind != nil {
 		skipDefaultGroupBind = *req.SkipDefaultGroupBind
 	}
+	duplicateAccountMode, err := resolveDataDuplicateAccountMode(req)
+	if err != nil {
+		return DataImportResult{}, err
+	}
+	updateExisting := duplicateAccountMode == dataDuplicateAccountModeOverwrite
+	allowDuplicateAccounts := duplicateAccountMode == dataDuplicateAccountModeCoexist
 
 	dataPayload := req.Data
 	result := DataImportResult{}
@@ -257,15 +455,10 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 	}
 
 	proxyKeyToID := make(map[string]int64, len(existingProxies))
-	// proxyNameToID 用于 backup_proxy_name 反查：DB 已有 + 本批次新建均会写入
-	proxyNameToID := make(map[string]int64, len(existingProxies))
 	for i := range existingProxies {
 		p := existingProxies[i]
 		key := buildProxyKey(p.Protocol, p.Host, p.Port, p.Username, p.Password)
 		proxyKeyToID[key] = p.ID
-		if p.Name != "" {
-			proxyNameToID[p.Name] = p.ID
-		}
 	}
 
 	for i := range dataPayload.Proxies {
@@ -290,76 +483,21 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			result.ProxyReused++
 			if normalizedStatus != "" {
 				if proxy, getErr := h.adminService.GetProxy(ctx, existingID); getErr == nil && proxy != nil && proxy.Status != normalizedStatus {
-					// 同步 status 时传入完整字段，避免零值覆盖已存在代理的有效期/fallback 配置。
-					var existingExpiresAt *time.Time
-					if item.ExpiresAt != nil {
-						t := time.Unix(*item.ExpiresAt, 0).UTC()
-						existingExpiresAt = &t
-					}
-					existingFallbackMode := item.FallbackMode
-					if existingFallbackMode == "" {
-						existingFallbackMode = service.FallbackModeNone
-					}
-					var existingBackupProxyID *int64
-					if item.BackupProxyName != "" {
-						if bid, ok := proxyNameToID[item.BackupProxyName]; ok {
-							existingBackupProxyID = &bid
-						}
-					}
 					_, _ = h.adminService.UpdateProxy(ctx, existingID, &service.UpdateProxyInput{
-						Status:         normalizedStatus,
-						ExpiresAt:      existingExpiresAt,
-						FallbackMode:   existingFallbackMode,
-						BackupProxyID:  existingBackupProxyID,
-						ExpiryWarnDays: item.ExpiryWarnDays,
-						Name:           proxy.Name,
-						Protocol:       proxy.Protocol,
-						Host:           proxy.Host,
-						Port:           proxy.Port,
-						Username:       proxy.Username,
-						Password:       proxy.Password,
+						Status: normalizedStatus,
 					})
 				}
 			}
 			continue
 		}
 
-		// 解析 expires_at（unix 秒 → *time.Time）
-		var expiresAt *time.Time
-		if item.ExpiresAt != nil {
-			t := time.Unix(*item.ExpiresAt, 0).UTC()
-			expiresAt = &t
-		}
-
-		// 解析 backup_proxy_name → backup_proxy_id
-		fallbackMode := item.FallbackMode
-		var backupProxyID *int64
-		if item.BackupProxyName != "" {
-			if bid, ok := proxyNameToID[item.BackupProxyName]; ok {
-				backupProxyID = &bid
-			} else {
-				// 查不到备用代理：降级 fallback_mode=none，记录 warning
-				fallbackMode = service.FallbackModeNone
-				result.Errors = append(result.Errors, DataImportError{
-					Kind:     "proxy",
-					Name:     item.Name,
-					ProxyKey: key,
-					Message:  fmt.Sprintf("backup_proxy_name %q not found, fallback_mode downgraded to none", item.BackupProxyName),
-				})
-			}
-		}
-
 		created, createErr := h.adminService.CreateProxy(ctx, &service.CreateProxyInput{
-			Name:           defaultProxyName(item.Name),
-			Protocol:       item.Protocol,
-			Host:           item.Host,
-			Port:           item.Port,
-			Username:       item.Username,
-			Password:       item.Password,
-			ExpiresAt:      expiresAt,
-			FallbackMode:   fallbackMode,
-			BackupProxyID:  backupProxyID,
-			ExpiryWarnDays: item.ExpiryWarnDays,
+			Name:     defaultProxyName(item.Name),
+			Protocol: item.Protocol,
+			Host:     item.Host,
+			Port:     item.Port,
+			Username: item.Username,
+			Password: item.Password,
 		})
 		if createErr != nil {
 			result.ProxyFailed++
@@ -372,32 +510,23 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			continue
 		}
 		proxyKeyToID[key] = created.ID
-		// 把新建代理的 name 也加入反查表，供后续批内代理引用
-		if created.Name != "" {
-			proxyNameToID[created.Name] = created.ID
-		}
 		result.ProxyCreated++
 
 		if normalizedStatus != "" && normalizedStatus != created.Status {
-			// 新建后同步 status 时，传入完整字段，避免零值覆盖刚创建的有效期/fallback 配置。
 			_, _ = h.adminService.UpdateProxy(ctx, created.ID, &service.UpdateProxyInput{
-				Status:         normalizedStatus,
-				ExpiresAt:      expiresAt,
-				FallbackMode:   fallbackMode,
-				BackupProxyID:  backupProxyID,
-				ExpiryWarnDays: item.ExpiryWarnDays,
-				Name:           created.Name,
-				Protocol:       created.Protocol,
-				Host:           created.Host,
-				Port:           created.Port,
-				Username:       created.Username,
-				Password:       created.Password,
+				Status: normalizedStatus,
 			})
 		}
 	}
 
 	// 收集需要异步设置隐私的 Antigravity OAuth 账号
 	var privacyAccounts []*service.Account
+	existingAccounts, err := h.listAccountsFiltered(ctx, "", "", "", "", 0, "", "name", "asc")
+	if err != nil {
+		return result, err
+	}
+	accountIndex := buildDataAccountIndex(existingAccounts)
+	seenImportIdentities := map[string]int{}
 
 	for i := range dataPayload.Accounts {
 		item := dataPayload.Accounts[i]
@@ -428,6 +557,57 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		}
 
 		enrichCredentialsFromIDToken(&item)
+		identityKey := dataAccountNameIdentityKey(item.Name)
+		if !allowDuplicateAccounts {
+			if duplicateIndex, ok := firstSeenDataAccountIdentity(seenImportIdentities, identityKey); ok {
+				result.AccountFailed++
+				result.Errors = append(result.Errors, DataImportError{
+					Kind:    "account",
+					Name:    item.Name,
+					Message: fmt.Sprintf("duplicate account in import payload with item #%d", duplicateIndex),
+				})
+				continue
+			}
+		}
+		markDataAccountIdentitySeen(seenImportIdentities, identityKey, i+1)
+		if existing := accountIndex.Find([]string{identityKey}); existing != nil && !allowDuplicateAccounts {
+			if updateExisting {
+				updated, updateErr := h.updateExistingDataAccount(ctx, *existing, item, proxyID)
+				if updateErr != nil {
+					result.AccountFailed++
+					result.Errors = append(result.Errors, DataImportError{
+						Kind:    "account",
+						Name:    item.Name,
+						Message: updateErr.Error(),
+					})
+					continue
+				}
+				if updated != nil {
+					accountIndex.Add(*updated)
+					if len(item.Credentials) > 0 {
+						h.scheduleOpenAIResponsesProbe(updated)
+					}
+					if h.tokenCacheInvalidator != nil && updated.IsOAuth() {
+						if invalidateErr := h.tokenCacheInvalidator.InvalidateToken(ctx, updated); invalidateErr != nil {
+							slog.Warn("import_data_invalidate_token_failed", "account_id", updated.ID, "error", invalidateErr)
+						}
+					}
+					if updated.Platform == service.PlatformAntigravity && updated.Type == service.AccountTypeOAuth {
+						privacyAccounts = append(privacyAccounts, updated)
+					}
+				}
+				result.AccountUpdated++
+				continue
+			}
+
+			result.AccountFailed++
+			result.Errors = append(result.Errors, DataImportError{
+				Kind:    "account",
+				Name:    item.Name,
+				Message: fmt.Sprintf("duplicate account already exists: #%d %s", existing.ID, existing.Name),
+			})
+			continue
+		}
 
 		accountInput := &service.CreateAccountInput{
 			Name:                 item.Name,
@@ -460,7 +640,9 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		if created.Platform == service.PlatformAntigravity && created.Type == service.AccountTypeOAuth {
 			privacyAccounts = append(privacyAccounts, created)
 		}
-		h.scheduleGrokImportProbe(created)
+		if !allowDuplicateAccounts {
+			accountIndex.Add(*created)
+		}
 		result.AccountCreated++
 	}
 
@@ -482,6 +664,38 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 	}
 
 	return result, nil
+}
+
+func (h *AccountHandler) updateExistingDataAccount(ctx context.Context, existing service.Account, item DataAccount, proxyID *int64) (*service.Account, error) {
+	if !strings.EqualFold(strings.TrimSpace(existing.Platform), strings.TrimSpace(item.Platform)) {
+		return nil, fmt.Errorf("cannot overwrite account #%d %s: platform mismatch (%s != %s)", existing.ID, existing.Name, existing.Platform, item.Platform)
+	}
+
+	concurrency := item.Concurrency
+	priority := item.Priority
+	updateInput := &service.UpdateAccountInput{
+		Name:               item.Name,
+		Notes:              item.Notes,
+		Type:               item.Type,
+		Credentials:        item.Credentials,
+		Extra:              item.Extra,
+		Concurrency:        &concurrency,
+		Priority:           &priority,
+		RateMultiplier:     item.RateMultiplier,
+		ExpiresAt:          item.ExpiresAt,
+		AutoPauseOnExpired: item.AutoPauseOnExpired,
+	}
+
+	if item.ProxyKey != nil {
+		if proxyID != nil {
+			updateInput.ProxyID = proxyID
+		} else {
+			clearProxyID := int64(0)
+			updateInput.ProxyID = &clearProxyID
+		}
+	}
+
+	return h.adminService.UpdateAccount(ctx, existing.ID, updateInput)
 }
 
 func (h *AccountHandler) listAllProxies(ctx context.Context) ([]service.Proxy, error) {
@@ -635,18 +849,32 @@ func parseIncludeProxies(c *gin.Context) (bool, error) {
 	}
 }
 
-func validateDataHeader(payload DataPayload) error {
+func validateDataEnvelope(payload DataPayload) error {
 	if payload.Type != "" && payload.Type != dataType && payload.Type != legacyDataType {
 		return fmt.Errorf("unsupported data type: %s", payload.Type)
 	}
 	if payload.Version != 0 && payload.Version != dataVersion {
 		return fmt.Errorf("unsupported data version: %d", payload.Version)
 	}
-	if payload.Proxies == nil {
-		return errors.New("proxies is required")
+	return nil
+}
+
+func validateAccountDataPayload(payload DataPayload) error {
+	if err := validateDataEnvelope(payload); err != nil {
+		return err
 	}
 	if payload.Accounts == nil {
 		return errors.New("accounts is required")
+	}
+	return nil
+}
+
+func validateProxyDataPayload(payload DataPayload) error {
+	if err := validateDataEnvelope(payload); err != nil {
+		return err
+	}
+	if payload.Proxies == nil {
+		return errors.New("proxies is required")
 	}
 	return nil
 }
@@ -689,7 +917,7 @@ func validateDataAccount(item DataAccount) error {
 		return errors.New("account credentials is required")
 	}
 	switch item.Type {
-	case service.AccountTypeOAuth, service.AccountTypeSetupToken, service.AccountTypeAPIKey, service.AccountTypeUpstream:
+	case service.AccountTypeOAuth, service.AccountTypeSetupToken, service.AccountTypeAPIKey, service.AccountTypeUpstream, service.AccountTypeBedrock, service.AccountTypeServiceAccount:
 	default:
 		return fmt.Errorf("account type is invalid: %s", item.Type)
 	}
@@ -771,9 +999,6 @@ func normalizeProxyStatus(status string) string {
 	case service.StatusActive:
 		return service.StatusActive
 	case "inactive", service.StatusDisabled:
-		return "inactive"
-	case "expired":
-		// 导入 expired 代理按 inactive 处理，避免导入即触发到期改投逻辑
 		return "inactive"
 	default:
 		return normalized

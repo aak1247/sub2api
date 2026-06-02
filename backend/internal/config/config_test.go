@@ -831,6 +831,18 @@ func TestLoadDefaultDatabaseSSLMode(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultDatabasePoolConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	require.Equal(t, 256, cfg.Database.MaxOpenConns)
+	require.Equal(t, 10, cfg.Database.MaxIdleConns)
+	require.Equal(t, 30, cfg.Database.ConnMaxLifetimeMinutes)
+	require.Equal(t, 5, cfg.Database.ConnMaxIdleTimeMinutes)
+}
+
 func TestValidateLinuxDoFrontendRedirectURL(t *testing.T) {
 	resetViperWithJWTSecret(t)
 

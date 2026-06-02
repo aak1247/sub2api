@@ -647,12 +647,14 @@ func (s *AccountRepoSuite) TestListByGroup() {
 
 func (s *AccountRepoSuite) TestListActive() {
 	mustCreateAccount(s.T(), s.client, &service.Account{Name: "active1", Status: service.StatusActive})
+	mustCreateAccount(s.T(), s.client, &service.Account{Name: "refreshed1", Status: service.StatusRefreshed})
 	mustCreateAccount(s.T(), s.client, &service.Account{Name: "inactive1", Status: service.StatusDisabled})
 
 	accounts, err := s.repo.ListActive(s.ctx)
 	s.Require().NoError(err, "ListActive")
-	s.Require().Len(accounts, 1)
+	s.Require().Len(accounts, 2)
 	s.Require().Equal("active1", accounts[0].Name)
+	s.Require().Equal("refreshed1", accounts[1].Name)
 }
 
 func (s *AccountRepoSuite) TestListByPlatform() {

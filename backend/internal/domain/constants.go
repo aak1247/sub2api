@@ -2,12 +2,13 @@ package domain
 
 // Status constants
 const (
-	StatusActive   = "active"
-	StatusDisabled = "disabled"
-	StatusError    = "error"
-	StatusUnused   = "unused"
-	StatusUsed     = "used"
-	StatusExpired  = "expired"
+	StatusActive    = "active"
+	StatusDisabled  = "disabled"
+	StatusError     = "error"
+	StatusRefreshed = "refreshed"
+	StatusUnused    = "unused"
+	StatusUsed      = "used"
+	StatusExpired   = "expired"
 )
 
 // Role constants

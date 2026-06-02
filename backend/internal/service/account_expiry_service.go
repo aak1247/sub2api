@@ -9,11 +9,12 @@ import (
 
 // AccountExpiryService periodically pauses expired accounts when auto-pause is enabled.
 type AccountExpiryService struct {
-	accountRepo AccountRepository
-	interval    time.Duration
-	stopCh      chan struct{}
-	stopOnce    sync.Once
-	wg          sync.WaitGroup
+	accountRepo    AccountRepository
+	settingService *SettingService
+	interval       time.Duration
+	stopCh         chan struct{}
+	stopOnce       sync.Once
+	wg             sync.WaitGroup
 }
 
 func NewAccountExpiryService(accountRepo AccountRepository, interval time.Duration) *AccountExpiryService {
@@ -22,6 +23,13 @@ func NewAccountExpiryService(accountRepo AccountRepository, interval time.Durati
 		interval:    interval,
 		stopCh:      make(chan struct{}),
 	}
+}
+
+func (s *AccountExpiryService) SetSettingService(settingService *SettingService) {
+	if s == nil {
+		return
+	}
+	s.settingService = settingService
 }
 
 func (s *AccountExpiryService) Start() {
@@ -59,6 +67,10 @@ func (s *AccountExpiryService) Stop() {
 func (s *AccountExpiryService) runOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	if s.settingService != nil && !s.settingService.GetAccountExpiryAutoPauseEnabled(ctx) {
+		return
+	}
 
 	updated, err := s.accountRepo.AutoPauseExpiredAccounts(ctx, time.Now())
 	if err != nil {

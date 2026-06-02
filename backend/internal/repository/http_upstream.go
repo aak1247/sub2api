@@ -1379,6 +1379,16 @@ type trackedBody struct {
 	onClose       func() // 关闭时的回调函数
 }
 
+// Read 读取响应体，并在 EOF 时释放 in-flight 计数。
+// 非流式调用方读完整个 body 后即使漏掉 Close，也不会让连接池条目永久保持活跃。
+func (b *trackedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF && b.onClose != nil {
+		b.once.Do(b.onClose)
+	}
+	return n, err
+}
+
 // Close 关闭响应体并执行回调
 // 使用 sync.Once 确保回调只执行一次
 func (b *trackedBody) Close() error {
