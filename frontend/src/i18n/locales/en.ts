@@ -3127,7 +3127,6 @@ export default {
         lastUsed: 'Last Used',
         createdAt: 'Created',
         expiresAt: 'Expires At',
-        createdAt: 'Created At',
         actions: 'Actions'
       },
       usageWindowsHint: '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by sub2api, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within sub2api.',
@@ -6196,6 +6195,17 @@ export default {
         cooldownSecondsHint: 'Default cooldown duration (1-7200 seconds); explicit upstream reset times still take precedence',
         saved: '429 default cooldown settings saved',
         saveFailed: 'Failed to save 429 default cooldown settings'
+      },
+      openaiQuotaAutoPause: {
+        title: 'OpenAI Quota Auto-pause',
+        description: 'When an OpenAI account reaches its 5h / 7d usage threshold, the scheduler skips it automatically and resumes once the window rolls over. Per-account thresholds take precedence over this global default.',
+        enabled: 'Enable Quota Auto-pause',
+        enabledHint: 'When enabled, OpenAI accounts exceeding usage thresholds will be automatically paused',
+        threshold5h: '5h Usage Threshold (%)',
+        threshold7d: '7d Usage Threshold (%)',
+        thresholdHint: 'Value 0-100; leave blank or 0 to disable. Recommended: 80-95.',
+        saved: 'OpenAI quota auto-pause settings saved',
+        saveFailed: 'Failed to save OpenAI quota auto-pause settings'
       },
       streamTimeout: {
         title: 'Stream Timeout Handling',

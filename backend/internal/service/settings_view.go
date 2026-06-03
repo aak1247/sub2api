@@ -464,6 +464,25 @@ type RateLimit429CooldownSettings struct {
 	CooldownSeconds int `json:"cooldown_seconds"`
 }
 
+// OpenAIQuotaAutoPauseSettings OpenAI 账号配额自动暂停配置
+type OpenAIQuotaAutoPauseSettings struct {
+	// Enabled 是否启用全局默认用量阈值自动暂停
+	Enabled bool `json:"enabled"`
+	// DefaultThreshold5h 默认 5h 用量阈值 (0-1, 0=不限制)
+	DefaultThreshold5h float64 `json:"default_threshold_5h"`
+	// DefaultThreshold7d 默认 7d 用量阈值 (0-1, 0=不限制)
+	DefaultThreshold7d float64 `json:"default_threshold_7d"`
+}
+
+// DefaultOpenAIQuotaAutoPauseSettings 返回默认的 OpenAI 配额自动暂停配置（禁用）
+func DefaultOpenAIQuotaAutoPauseSettings() *OpenAIQuotaAutoPauseSettings {
+	return &OpenAIQuotaAutoPauseSettings{
+		Enabled:            false,
+		DefaultThreshold5h: 0,
+		DefaultThreshold7d: 0,
+	}
+}
+
 // DefaultOverloadCooldownSettings 返回默认的过载冷却配置（启用，10分钟）
 func DefaultOverloadCooldownSettings() *OverloadCooldownSettings {
 	return &OverloadCooldownSettings{

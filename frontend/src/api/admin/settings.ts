@@ -1128,6 +1128,31 @@ export async function updateRateLimit429CooldownSettings(
   return data;
 }
 
+// ==================== OpenAI Quota Auto-Pause Settings ====================
+
+export interface OpenAIQuotaAutoPauseSettings {
+  enabled: boolean;
+  default_threshold_5h: number; // 0-1, 0=disabled
+  default_threshold_7d: number; // 0-1, 0=disabled
+}
+
+export async function getOpenAIQuotaAutoPauseSettings(): Promise<OpenAIQuotaAutoPauseSettings> {
+  const { data } = await apiClient.get<OpenAIQuotaAutoPauseSettings>(
+    "/admin/settings/openai-quota-auto-pause",
+  );
+  return data;
+}
+
+export async function updateOpenAIQuotaAutoPauseSettings(
+  settings: OpenAIQuotaAutoPauseSettings,
+): Promise<OpenAIQuotaAutoPauseSettings> {
+  const { data } = await apiClient.put<OpenAIQuotaAutoPauseSettings>(
+    "/admin/settings/openai-quota-auto-pause",
+    settings,
+  );
+  return data;
+}
+
 // ==================== Stream Timeout Settings ====================
 
 /**
@@ -1354,6 +1379,8 @@ export const settingsAPI = {
   updateOverloadCooldownSettings,
   getRateLimit429CooldownSettings,
   updateRateLimit429CooldownSettings,
+  getOpenAIQuotaAutoPauseSettings,
+  updateOpenAIQuotaAutoPauseSettings,
   getStreamTimeoutSettings,
   updateStreamTimeoutSettings,
   getRectifierSettings,

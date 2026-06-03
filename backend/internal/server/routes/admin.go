@@ -441,6 +441,9 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		// 429默认回避配置
 		adminSettings.GET("/rate-limit-429-cooldown", h.Admin.Setting.GetRateLimit429CooldownSettings)
 		adminSettings.PUT("/rate-limit-429-cooldown", h.Admin.Setting.UpdateRateLimit429CooldownSettings)
+		// OpenAI 配额自动暂停配置
+		adminSettings.GET("/openai-quota-auto-pause", h.Admin.Setting.GetOpenAIQuotaAutoPauseSettings)
+		adminSettings.PUT("/openai-quota-auto-pause", h.Admin.Setting.UpdateOpenAIQuotaAutoPauseSettings)
 		// 流超时处理配置
 		adminSettings.GET("/stream-timeout", h.Admin.Setting.GetStreamTimeoutSettings)
 		adminSettings.PUT("/stream-timeout", h.Admin.Setting.UpdateStreamTimeoutSettings)

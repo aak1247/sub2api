@@ -3140,6 +3140,62 @@ func (h *SettingHandler) UpdateRateLimit429CooldownSettings(c *gin.Context) {
 	})
 }
 
+// GetOpenAIQuotaAutoPauseSettings 获取 OpenAI 配额自动暂停配置
+// GET /api/v1/admin/settings/openai-quota-auto-pause
+func (h *SettingHandler) GetOpenAIQuotaAutoPauseSettings(c *gin.Context) {
+	settings, err := h.settingService.GetOpenAIQuotaAutoPauseSystemSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, dto.OpenAIQuotaAutoPauseSettings{
+		Enabled:            settings.Enabled,
+		DefaultThreshold5h: settings.DefaultThreshold5h,
+		DefaultThreshold7d: settings.DefaultThreshold7d,
+	})
+}
+
+// UpdateOpenAIQuotaAutoPauseSettingsRequest 更新 OpenAI 配额自动暂停配置请求
+type UpdateOpenAIQuotaAutoPauseSettingsRequest struct {
+	Enabled            bool    `json:"enabled"`
+	DefaultThreshold5h float64 `json:"default_threshold_5h"`
+	DefaultThreshold7d float64 `json:"default_threshold_7d"`
+}
+
+// UpdateOpenAIQuotaAutoPauseSettings 更新 OpenAI 配额自动暂停配置
+// PUT /api/v1/admin/settings/openai-quota-auto-pause
+func (h *SettingHandler) UpdateOpenAIQuotaAutoPauseSettings(c *gin.Context) {
+	var req UpdateOpenAIQuotaAutoPauseSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	settings := &service.OpenAIQuotaAutoPauseSettings{
+		Enabled:            req.Enabled,
+		DefaultThreshold5h: req.DefaultThreshold5h,
+		DefaultThreshold7d: req.DefaultThreshold7d,
+	}
+
+	if err := h.settingService.SetOpenAIQuotaAutoPauseSystemSettings(c.Request.Context(), settings); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	updatedSettings, err := h.settingService.GetOpenAIQuotaAutoPauseSystemSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, dto.OpenAIQuotaAutoPauseSettings{
+		Enabled:            updatedSettings.Enabled,
+		DefaultThreshold5h: updatedSettings.DefaultThreshold5h,
+		DefaultThreshold7d: updatedSettings.DefaultThreshold7d,
+	})
+}
+
 // GetStreamTimeoutSettings 获取流超时处理配置
 // GET /api/v1/admin/settings/stream-timeout
 func (h *SettingHandler) GetStreamTimeoutSettings(c *gin.Context) {

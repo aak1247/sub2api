@@ -346,6 +346,13 @@ type RateLimit429CooldownSettings struct {
 	CooldownSeconds int  `json:"cooldown_seconds"`
 }
 
+// OpenAIQuotaAutoPauseSettings OpenAI 配额自动暂停配置 DTO
+type OpenAIQuotaAutoPauseSettings struct {
+	Enabled            bool    `json:"enabled"`
+	DefaultThreshold5h float64 `json:"default_threshold_5h"`
+	DefaultThreshold7d float64 `json:"default_threshold_7d"`
+}
+
 // StreamTimeoutSettings 流超时处理配置 DTO
 type StreamTimeoutSettings struct {
 	Enabled                bool   `json:"enabled"`

@@ -4213,7 +4213,64 @@ func (s *SettingService) SetRateLimit429CooldownSettings(ctx context.Context, se
 	return s.settingRepo.Set(ctx, SettingKeyRateLimit429CooldownSettings, string(data))
 }
 
-// GetOIDCConnectOAuthConfig 返回用于登录的“最终生效” OIDC 配置。
+// GetOpenAIQuotaAutoPauseSystemSettings 获取系统设置中的 OpenAI 配额自动暂停配置
+func (s *SettingService) GetOpenAIQuotaAutoPauseSystemSettings(ctx context.Context) (*OpenAIQuotaAutoPauseSettings, error) {
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyOpenAIQuotaAutoPauseSettings)
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return DefaultOpenAIQuotaAutoPauseSettings(), nil
+		}
+		return nil, fmt.Errorf("get openai quota auto pause settings: %w", err)
+	}
+	if value == "" {
+		return DefaultOpenAIQuotaAutoPauseSettings(), nil
+	}
+
+	var settings OpenAIQuotaAutoPauseSettings
+	if err := json.Unmarshal([]byte(value), &settings); err != nil {
+		return DefaultOpenAIQuotaAutoPauseSettings(), nil
+	}
+
+	// 修正配置值范围
+	settings.DefaultThreshold5h = clamp01(settings.DefaultThreshold5h)
+	settings.DefaultThreshold7d = clamp01(settings.DefaultThreshold7d)
+
+	return &settings, nil
+}
+
+// SetOpenAIQuotaAutoPauseSystemSettings 设置系统设置中的 OpenAI 配额自动暂停配置
+func (s *SettingService) SetOpenAIQuotaAutoPauseSystemSettings(ctx context.Context, settings *OpenAIQuotaAutoPauseSettings) error {
+	if settings == nil {
+		return fmt.Errorf("settings cannot be nil")
+	}
+
+	settings.DefaultThreshold5h = clamp01(settings.DefaultThreshold5h)
+	settings.DefaultThreshold7d = clamp01(settings.DefaultThreshold7d)
+
+	if !settings.Enabled {
+		settings.DefaultThreshold5h = 0
+		settings.DefaultThreshold7d = 0
+	}
+
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("marshal openai quota auto pause settings: %w", err)
+	}
+
+	if err := s.settingRepo.Set(ctx, SettingKeyOpenAIQuotaAutoPauseSettings, string(data)); err != nil {
+		return err
+	}
+
+	// 同步更新内存缓存，使设置立即生效
+	s.SetOpenAIQuotaAutoPauseSettings(OpsOpenAIAccountQuotaAutoPauseSettings{
+		DefaultThreshold5h: settings.DefaultThreshold5h,
+		DefaultThreshold7d: settings.DefaultThreshold7d,
+	})
+
+	return nil
+}
+
+// GetOIDCConnectOAuthConfig 返回用于登录的”最终生效” OIDC 配置。
 //
 // 优先级：
 // - 若对应系统设置键存在，则覆盖 config.yaml/env 的值
@@ -4684,6 +4741,21 @@ func (s *SettingService) refreshOpenAIQuotaAutoPauseSettings(ctx context.Context
 			settings = prior.settings
 		}
 		ttl = openAIQuotaAutoPauseSettingsErrorTTL
+	}
+
+	// System settings override: if the dedicated system settings key exists and is
+	// enabled, its thresholds take precedence over the ops advanced settings.
+	sysRaw, sysErr := s.settingRepo.GetValue(dbCtx, SettingKeyOpenAIQuotaAutoPauseSettings)
+	if sysErr == nil && strings.TrimSpace(sysRaw) != "" {
+		var sysCfg OpenAIQuotaAutoPauseSettings
+		if jsonErr := json.Unmarshal([]byte(sysRaw), &sysCfg); jsonErr == nil {
+			if sysCfg.Enabled {
+				settings.DefaultThreshold5h = clamp01(sysCfg.DefaultThreshold5h)
+				settings.DefaultThreshold7d = clamp01(sysCfg.DefaultThreshold7d)
+			} else {
+				settings = OpsOpenAIAccountQuotaAutoPauseSettings{}
+			}
+		}
 	}
 
 	s.openAIQuotaAutoPauseSettingsCache.Store(&cachedOpenAIQuotaAutoPauseSettings{

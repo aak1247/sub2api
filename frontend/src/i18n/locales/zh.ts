@@ -3164,7 +3164,6 @@ export default {
         lastUsed: '最近使用',
         createdAt: '创建时间',
         expiresAt: '过期时间',
-        createdAt: '创建时间',
         actions: '操作'
       },
       usageWindowsHint: '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 sub2api 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 sub2api 端解除该限制。',
@@ -6351,6 +6350,17 @@ export default {
         cooldownSecondsHint: '默认回避持续时间（1-7200 秒）；上游返回明确 reset 时仍优先使用上游时间',
         saved: '429 默认回避设置保存成功',
         saveFailed: '保存 429 默认回避设置失败'
+      },
+      openaiQuotaAutoPause: {
+        title: 'OpenAI 配额自动暂停',
+        description: '当 OpenAI 账号 5h / 7d 用量达到阈值时，调度自动跳过该账号；窗口滚动后自动恢复。账号级阈值优先于此全局默认值。',
+        enabled: '启用配额自动暂停',
+        enabledHint: '启用后，达到用量阈值的 OpenAI 账号将自动暂停调度',
+        threshold5h: '5h 用量阈值 (%)',
+        threshold7d: '7d 用量阈值 (%)',
+        thresholdHint: '取值 0-100，留空或 0 表示不限制。推荐 80-95。',
+        saved: 'OpenAI 配额自动暂停设置保存成功',
+        saveFailed: '保存 OpenAI 配额自动暂停设置失败'
       },
       streamTimeout: {
         title: '流超时处理',
