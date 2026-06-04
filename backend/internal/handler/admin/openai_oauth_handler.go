@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -18,10 +19,12 @@ import (
 
 // OpenAIOAuthHandler handles OpenAI OAuth-related operations
 type OpenAIOAuthHandler struct {
-	openaiOAuthService *service.OpenAIOAuthService
-	adminService       service.AdminService
-	quotaService       openAIQuotaService
-	rateLimitService   openAIAccountStateRecoverer
+	openaiOAuthService    *service.OpenAIOAuthService
+	adminService          service.AdminService
+	quotaService          openAIQuotaService
+	rateLimitService      openAIAccountStateRecoverer
+	oauthRefreshAPI       *service.OAuthRefreshAPI
+	tokenCacheInvalidator service.TokenCacheInvalidator
 }
 
 type openAIQuotaService interface {
@@ -101,6 +104,29 @@ func NewOpenAIOAuthHandler(
 	if rateLimitService != nil {
 		h.rateLimitService = rateLimitService
 	}
+	return h
+}
+
+func (h *OpenAIOAuthHandler) SetOAuthRefreshAPI(api *service.OAuthRefreshAPI) {
+	h.oauthRefreshAPI = api
+}
+
+func (h *OpenAIOAuthHandler) SetTokenCacheInvalidator(invalidator service.TokenCacheInvalidator) {
+	h.tokenCacheInvalidator = invalidator
+}
+
+// ProvideOpenAIOAuthHandler creates OpenAIOAuthHandler with OAuthRefreshAPI injection.
+func ProvideOpenAIOAuthHandler(
+	openaiOAuthService *service.OpenAIOAuthService,
+	adminService service.AdminService,
+	quotaService *service.OpenAIQuotaService,
+	rateLimitService *service.RateLimitService,
+	oauthRefreshAPI *service.OAuthRefreshAPI,
+	tokenCacheInvalidator service.TokenCacheInvalidator,
+) *OpenAIOAuthHandler {
+	h := NewOpenAIOAuthHandler(openaiOAuthService, adminService, quotaService, rateLimitService)
+	h.SetOAuthRefreshAPI(oauthRefreshAPI)
+	h.SetTokenCacheInvalidator(tokenCacheInvalidator)
 	return h
 }
 
@@ -265,6 +291,33 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 	// 再被凭据写守卫拦下的无谓副作用(外审第6轮)。
 	if account.IsCredentialShadow() {
 		response.BadRequest(c, "Cannot refresh spark shadow account; its credentials are managed by the parent account")
+		return
+	}
+
+	if h.oauthRefreshAPI != nil {
+		executor, execErr := service.NewOAuthRefreshExecutorForAccount(account, nil, h.openaiOAuthService, nil, nil)
+		if execErr != nil {
+			response.ErrorFrom(c, execErr)
+			return
+		}
+		result, refreshErr := h.oauthRefreshAPI.RefreshForced(c.Request.Context(), account, executor, 0)
+		if refreshErr != nil {
+			response.ErrorFrom(c, refreshErr)
+			return
+		}
+		if result.LockHeld {
+			response.ErrorFrom(c, infraerrors.Conflict("TOKEN_REFRESH_IN_PROGRESS", "token refresh is already in progress"))
+			return
+		}
+		updatedAccount, getErr := h.adminService.GetAccount(c.Request.Context(), accountID)
+		if getErr != nil {
+			response.ErrorFrom(c, getErr)
+			return
+		}
+		if h.tokenCacheInvalidator != nil {
+			_ = h.tokenCacheInvalidator.InvalidateToken(c.Request.Context(), updatedAccount)
+		}
+		response.Success(c, dto.AccountFromService(updatedAccount))
 		return
 	}
 

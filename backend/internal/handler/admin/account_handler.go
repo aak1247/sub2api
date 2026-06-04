@@ -61,6 +61,7 @@ type AccountHandler struct {
 	sessionLimitCache       service.SessionLimitCache
 	rpmCache                service.RPMCache
 	tokenCacheInvalidator   service.TokenCacheInvalidator
+	oauthRefreshAPI         *service.OAuthRefreshAPI
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
@@ -108,6 +109,10 @@ func NewAccountHandler(
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
 	}
+}
+
+func (h *AccountHandler) SetOAuthRefreshAPI(api *service.OAuthRefreshAPI) {
+	h.oauthRefreshAPI = api
 }
 
 // CreateAccountRequest represents create account request
@@ -1201,6 +1206,44 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	if account.IsCredentialShadow() {
 		return nil, "", infraerrors.BadRequest("SPARK_SHADOW_NO_REFRESH",
 			"cannot refresh spark shadow account; its credentials are managed by the parent account")
+	}
+
+	if h.oauthRefreshAPI != nil {
+		executor, err := service.NewOAuthRefreshExecutorForAccount(
+			account,
+			h.oauthService,
+			h.openaiOAuthService,
+			h.geminiOAuthService,
+			h.antigravityOAuthService,
+		)
+		if err != nil {
+			return nil, "", err
+		}
+		result, err := h.oauthRefreshAPI.RefreshForced(ctx, account, executor, 0)
+		if err != nil {
+			if account.IsOpenAI() {
+				h.adminService.EnsureOpenAIPrivacy(ctx, account)
+			}
+			return nil, "", err
+		}
+		if result.LockHeld {
+			return nil, "", infraerrors.Conflict("TOKEN_REFRESH_IN_PROGRESS", "token refresh is already in progress")
+		}
+		updatedAccount, err := h.adminService.GetAccount(ctx, account.ID)
+		if err != nil {
+			return nil, "", err
+		}
+		if h.tokenCacheInvalidator != nil {
+			if invalidateErr := h.tokenCacheInvalidator.InvalidateToken(ctx, updatedAccount); invalidateErr != nil {
+				log.Printf("[WARN] Failed to invalidate token cache for account %d: %v", updatedAccount.ID, invalidateErr)
+			}
+		}
+		h.adminService.EnsureOpenAIPrivacy(ctx, updatedAccount)
+		h.adminService.EnsureAntigravityPrivacy(ctx, updatedAccount)
+		if updatedAccount.Platform == service.PlatformAntigravity && strings.TrimSpace(updatedAccount.GetCredential("project_id")) == "" {
+			return updatedAccount, "missing_project_id_temporary", nil
+		}
+		return updatedAccount, "", nil
 	}
 
 	var newCredentials map[string]any

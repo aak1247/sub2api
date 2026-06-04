@@ -178,6 +178,21 @@ func ProvideOpenAIQuotaService(
 	return service
 }
 
+// ProvideCRSSyncService creates CRSSyncService with OAuthRefreshAPI injection.
+func ProvideCRSSyncService(
+	accountRepo AccountRepository,
+	proxyRepo ProxyRepository,
+	oauthService *OAuthService,
+	openaiOAuthService *OpenAIOAuthService,
+	geminiOAuthService *GeminiOAuthService,
+	cfg *config.Config,
+	refreshAPI *OAuthRefreshAPI,
+) *CRSSyncService {
+	svc := NewCRSSyncService(accountRepo, proxyRepo, oauthService, openaiOAuthService, geminiOAuthService, cfg)
+	svc.SetOAuthRefreshAPI(refreshAPI)
+	return svc
+}
+
 func ProvideAccountUsageService(
 	accountRepo AccountRepository,
 	usageLogRepo UsageLogRepository,
@@ -812,7 +827,7 @@ var ProviderSet = wire.NewSet(
 	NewUsageRecordWorkerPool,
 	ProvideSchedulerSnapshotService,
 	NewIdentityService,
-	NewCRSSyncService,
+	ProvideCRSSyncService,
 	ProvideUpdateService,
 	ProvideTokenRefreshService,
 	wire.Bind(new(GrokOAuthReconciler), new(*TokenRefreshService)),
