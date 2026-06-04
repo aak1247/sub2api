@@ -137,6 +137,36 @@ func TestBuildCodexUsageExtraUpdates_FreshAccountUsedPercentNotInverted_Issue299
 	}
 }
 
+func TestBuildCodexUsageExtraUpdates_SkipsEmptyZeroQuotaSlots(t *testing.T) {
+	primaryUsed := 0.0
+	primaryReset := 0
+	primaryWindow := 0
+	secondaryUsed := 0.0
+	secondaryReset := 0
+	secondaryWindow := 0
+
+	snapshot := &OpenAICodexUsageSnapshot{
+		PrimaryUsedPercent:         &primaryUsed,
+		PrimaryResetAfterSeconds:   &primaryReset,
+		PrimaryWindowMinutes:       &primaryWindow,
+		SecondaryUsedPercent:       &secondaryUsed,
+		SecondaryResetAfterSeconds: &secondaryReset,
+		SecondaryWindowMinutes:     &secondaryWindow,
+		UpdatedAt:                  "2026-06-03T11:00:00Z",
+	}
+
+	updates := buildCodexUsageExtraUpdates(snapshot, time.Time{})
+	if updates == nil {
+		t.Fatal("expected non-nil updates")
+	}
+	if _, ok := updates["codex_5h_used_percent"]; ok {
+		t.Fatalf("empty 5h quota slot must not be normalized to canonical used percent: %v", updates["codex_5h_used_percent"])
+	}
+	if _, ok := updates["codex_7d_used_percent"]; ok {
+		t.Fatalf("empty 7d quota slot must not be normalized to canonical used percent: %v", updates["codex_7d_used_percent"])
+	}
+}
+
 func TestBuildCodexUsageExtraUpdates_FallbackToNowWhenUpdatedAtInvalid(t *testing.T) {
 	primaryUsed := 15.0
 	primaryReset := 30

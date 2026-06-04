@@ -53,6 +53,30 @@ describe('UsageProgressBar', () => {
     expect(wrapper.text()).not.toContain('usage.resetPending')
   })
 
+  it('窗口统计为空时把残留利用率显示为 0%', () => {
+    const wrapper = mount(UsageProgressBar, {
+      props: {
+        label: '5h',
+        utilization: 99,
+        resetsAt: '2026-03-17T02:30:00Z',
+        showNowWhenIdle: true,
+        color: 'indigo',
+        windowStats: {
+          requests: 0,
+          tokens: 0,
+          cost: 0,
+          standard_cost: 0,
+          user_cost: 0
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('0%')
+    expect(wrapper.text()).toContain('现在')
+    expect(wrapper.text()).not.toContain('99%')
+    expect(wrapper.text()).not.toContain('2h 30m')
+  })
+
   it('showNowWhenIdle=false 时保持原有倒计时行为', () => {
     const wrapper = mount(UsageProgressBar, {
       props: {

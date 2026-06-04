@@ -296,6 +296,7 @@ export async function applyOAuthCredentials(
     type: 'oauth' | 'setup-token'
     credentials: Record<string, unknown>
     extra?: Record<string, unknown>
+    proxy_id?: number | null
   }
 ): Promise<Account> {
   const { data } = await apiClient.post<Account>(

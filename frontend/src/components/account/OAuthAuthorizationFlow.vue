@@ -9,6 +9,18 @@
       <div class="flex-1">
         <h4 class="mb-3 font-semibold text-blue-900 dark:text-blue-200">{{ oauthTitle }}</h4>
 
+        <div v-if="showProxySelector" class="mb-4">
+          <label class="mb-2 block text-sm font-medium text-blue-800 dark:text-blue-300">
+            {{ t('admin.accounts.proxy') }}
+          </label>
+          <ProxySelector
+            :model-value="selectedProxyId"
+            :proxies="proxies"
+            :disabled="loading"
+            @update:model-value="handleProxyChange"
+          />
+        </div>
+
         <!-- Auth Method Selection -->
         <div v-if="showMethodSelection" class="mb-4">
           <label class="mb-2 block text-sm font-medium text-blue-800 dark:text-blue-300">
@@ -814,8 +826,9 @@ import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
+import ProxySelector from '@/components/common/ProxySelector.vue'
 import type { AddMethod, AuthInputMethod } from '@/composables/useAccountOAuth'
-import type { AccountPlatform } from '@/types'
+import type { AccountPlatform, Proxy } from '@/types'
 
 interface Props {
   addMethod: AddMethod
@@ -840,6 +853,9 @@ interface Props {
   initialInputMethod?: AuthInputMethod
   platform?: AccountPlatform // Platform type for different UI/text
   showProjectId?: boolean // New prop to control project ID visibility
+  proxies?: Proxy[]
+  selectedProxyId?: number | null
+  showProxySelector?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -863,7 +879,10 @@ const props = withDefaults(defineProps<Props>(), {
   showManualOption: true,
   initialInputMethod: 'manual',
   platform: 'anthropic',
-  showProjectId: true
+  showProjectId: true,
+  proxies: () => [],
+  selectedProxyId: null,
+  showProxySelector: false
 })
 
 const emit = defineEmits<{
@@ -878,6 +897,7 @@ const emit = defineEmits<{
   'import-codex-pat': [accessToken: string]
   'import-sso': [content: string]
   'update:inputMethod': [method: AuthInputMethod]
+  'update:selectedProxyId': [proxyId: number | null]
 }>()
 
 const { t } = useI18n()
@@ -1023,6 +1043,10 @@ watch(authCodeInput, (newVal) => {
 // Methods
 const handleGenerateUrl = () => {
   emit('generate-url')
+}
+
+const handleProxyChange = (proxyId: number | null) => {
+  emit('update:selectedProxyId', proxyId)
 }
 
 const handleCopyUrl = () => {

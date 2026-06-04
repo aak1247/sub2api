@@ -5,12 +5,26 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 )
 
 type accountUsageCodexProbeRepo struct {
 	stubOpenAIAccountRepo
 	updateExtraCh chan map[string]any
 	rateLimitCh   chan time.Time
+}
+
+type accountUsageWindowStatsRepo struct {
+	UsageLogRepository
+	stats *usagestats.AccountStats
+}
+
+func (r accountUsageWindowStatsRepo) GetAccountWindowStats(_ context.Context, _ int64, _ time.Time) (*usagestats.AccountStats, error) {
+	if r.stats == nil {
+		return &usagestats.AccountStats{}, nil
+	}
+	return r.stats, nil
 }
 
 func (r *accountUsageCodexProbeRepo) UpdateExtra(_ context.Context, _ int64, updates map[string]any) error {
@@ -203,6 +217,43 @@ func TestAccountUsageService_GetOpenAIUsage_DoesNotPromoteCodexExtraToRateLimit(
 	case got := <-repo.rateLimitCh:
 		t.Fatalf("不应将已耗尽的 codex extra 持久化为运行时限流状态: %v", got)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestAccountUsageService_GetOpenAIUsage_EmptyWindowStatsZeroesSnapshotUtilization(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	account := &Account{
+		ID:       123,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			"codex_5h_used_percent": 99.0,
+			"codex_5h_reset_at":     now.Add(5 * time.Hour).Format(time.RFC3339),
+			"codex_7d_used_percent": 88.0,
+			"codex_7d_reset_at":     now.Add(7 * 24 * time.Hour).Format(time.RFC3339),
+		},
+	}
+	svc := &AccountUsageService{
+		usageLogRepo: accountUsageWindowStatsRepo{stats: &usagestats.AccountStats{}},
+	}
+
+	usage, err := svc.getOpenAIUsage(context.Background(), account, false)
+	if err != nil {
+		t.Fatalf("getOpenAIUsage() error = %v", err)
+	}
+	if usage.FiveHour == nil {
+		t.Fatal("expected 5h usage")
+	}
+	if usage.FiveHour.Utilization != 0 {
+		t.Fatalf("5h utilization = %v, want 0 when window stats are empty", usage.FiveHour.Utilization)
+	}
+	if usage.SevenDay == nil {
+		t.Fatal("expected 7d usage")
+	}
+	if usage.SevenDay.Utilization != 0 {
+		t.Fatalf("7d utilization = %v, want 0 when window stats are empty", usage.SevenDay.Utilization)
 	}
 }
 

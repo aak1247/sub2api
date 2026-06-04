@@ -1,0 +1,102 @@
+{
+  "format_version": 1,
+  "bug_id": "BUG-20260603-OPENAI-ZERO-QUOTA-AUTOPAUSE",
+  "title": "OpenAI zero quota snapshot triggers quota auto-pause",
+  "status": "ARCHIVED",
+  "scope": "BACKEND",
+  "severity": "S2",
+  "priority": "P2",
+  "reporter": "aak1247",
+  "assignee": "codex",
+  "created_at": "2026-06-03T14:44:50Z",
+  "updated_at": "2026-06-03T14:47:36Z",
+  "impact_modules": [
+    "openai-gateway",
+    "openai-scheduler",
+    "codex-quota-snapshot"
+  ],
+  "impact_summary": "",
+  "environment": "local, 2026-06-03",
+  "tags": [],
+  "links": {
+    "issue_url": "",
+    "pr_url": "",
+    "commit": ""
+  },
+  "reproduction": {
+    "preconditions": [
+      "OpenAI quota auto-pause threshold is enabled",
+      "Codex quota probe/header snapshot contains primary and secondary used/reset/window values all zero"
+    ],
+    "steps": [
+      "persist Codex quota snapshot",
+      "select an OpenAI account with auto-pause defaults enabled"
+    ],
+    "e2e_full_flow": [],
+    "expected": "empty all-zero quota snapshot is treated as unknown/no usable signal and does not set temporary 429 unschedulable state",
+    "actual": "5h raw zero is normalized to 100% used, crosses threshold, and SetRateLimited/temporary 429 unschedulable state is applied",
+    "attempts": 1,
+    "successes": 1,
+    "probability": "100.0%",
+    "notes": ""
+  },
+  "tracking": {
+    "next_check_date": "2026-06-03",
+    "blockers": [],
+    "latest_push_action": "",
+    "progress": [
+      {
+        "at": "2026-06-03T14:44:50Z",
+        "by": "aak1247",
+        "status": "REPRODUCED",
+        "action": "Bug intake completed and saved",
+        "note": "Capture bug basics and reproduction signals"
+      },
+      {
+        "at": "2026-06-03T14:45:01Z",
+        "by": "aak1247",
+        "status": "RESOLVED",
+        "action": "Skip canonical Codex used_percent updates for all-zero empty quota slots and verify auto-pause no longer triggers.",
+        "note": "The 5h header can be remaining percent, but 0/0/0 percent-reset-window is an empty snapshot, not an exhausted window.",
+        "next_check_date": "2026-06-03"
+      },
+      {
+        "at": "2026-06-03T14:45:14Z",
+        "by": "aak1247",
+        "status": "ARCHIVED",
+        "action": "Archive bug with automated regression test",
+        "note": ""
+      },
+      {
+        "at": "2026-06-03T14:47:28Z",
+        "by": "aak1247",
+        "status": "RESOLVED",
+        "action": "Add read-side guard so existing bad canonical zero-quota snapshots do not trigger auto-pause.",
+        "note": "Regression now covers both new all-zero snapshots and previously persisted codex_5h/7d_used_percent=100 derived from empty raw quota slots.",
+        "next_check_date": "2026-06-03"
+      },
+      {
+        "at": "2026-06-03T14:47:36Z",
+        "by": "aak1247",
+        "status": "ARCHIVED",
+        "action": "Archive bug with automated regression test",
+        "note": ""
+      }
+    ]
+  },
+  "resolution": {
+    "root_cause": "",
+    "fix_summary": "",
+    "pr_url": "",
+    "commit": "",
+    "resolved_at": "2026-06-03T14:47:36Z"
+  },
+  "regression_test": {
+    "path": "backend/internal/service/openai_account_scheduler_test.go",
+    "command": "cd backend && go test ./internal/service -run 'TestBuildCodexUsageExtraUpdates_|TestOpenAIGatewayService_SelectAccountForModelWithExclusions_(AutoPauseBy5hThreshold|AutoPauseBy7dThreshold|EmptyZeroQuotaDoesNotAutoPause|ExistingBadZeroQuotaCanonicalDoesNotAutoPause|UsesGlobalDefaultThreshold|FreshUsageWindowStillPauses|StaleUsageWindowResetSkipsPause)'",
+    "type": "unit",
+    "framework": "go-test",
+    "last_run_at": "2026-06-03T14:47:36Z",
+    "result": "passed"
+  }
+}

@@ -1413,6 +1413,7 @@ type ApplyOAuthCredentialsRequest struct {
 	Type        string         `json:"type" binding:"required,oneof=oauth setup-token"`
 	Credentials map[string]any `json:"credentials" binding:"required"`
 	Extra       map[string]any `json:"extra"`
+	ProxyID     *int64         `json:"proxy_id"`
 }
 
 // ApplyOAuthCredentials 将"重新授权"得到的新凭据原子落库。
@@ -1461,6 +1462,7 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 	updatedAccount, err := h.adminService.UpdateAccount(ctx, accountID, &service.UpdateAccountInput{
 		Type:        req.Type,
 		Credentials: req.Credentials,
+		ProxyID:     req.ProxyID,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

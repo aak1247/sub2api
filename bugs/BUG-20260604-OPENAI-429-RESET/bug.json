@@ -1,0 +1,94 @@
+{
+  "format_version": 1,
+  "bug_id": "BUG-20260604-OPENAI-429-RESET",
+  "title": "OpenAI 429 cooldown ignores resets_in_seconds",
+  "status": "ARCHIVED",
+  "scope": "BACKEND",
+  "severity": "S2",
+  "priority": "P2",
+  "reporter": "aak1247",
+  "assignee": "codex",
+  "created_at": "2026-06-04T12:19:29Z",
+  "updated_at": "2026-06-04T12:26:11Z",
+  "impact_modules": [
+    "openai-gateway",
+    "rate-limit"
+  ],
+  "impact_summary": "",
+  "environment": "backend gateway, current main workspace",
+  "tags": [],
+  "links": {
+    "issue_url": "",
+    "pr_url": "",
+    "commit": ""
+  },
+  "reproduction": {
+    "preconditions": [
+      "OpenAI upstream returns HTTP 429 with response body/header containing resets_in_seconds"
+    ],
+    "steps": [
+      "send request through OpenAI gateway",
+      "upstream returns 429",
+      "inspect account/model cooldown reset time"
+    ],
+    "e2e_full_flow": [],
+    "expected": "cooldown reset is derived from upstream resets_in_seconds when present",
+    "actual": "cooldown reset often uses an incorrect fallback duration instead of resets_in_seconds",
+    "attempts": 1,
+    "successes": 1,
+    "probability": "100.0%",
+    "notes": ""
+  },
+  "tracking": {
+    "next_check_date": "2026-06-04",
+    "blockers": [],
+    "latest_push_action": "",
+    "progress": [
+      {
+        "at": "2026-06-04T12:19:29Z",
+        "by": "aak1247",
+        "status": "REPRODUCED",
+        "action": "Bug intake completed and saved",
+        "note": "Capture bug basics and reproduction signals"
+      },
+      {
+        "at": "2026-06-04T12:20:30Z",
+        "by": "aak1247",
+        "status": "IN_PROGRESS",
+        "action": "Prioritize OpenAI 429 body resets_in_seconds over x-codex header fallback and add regression test",
+        "note": "Root cause: handle429 checks x-codex headers before OpenAI body resets_in_seconds, so body-provided reset can be ignored.",
+        "next_check_date": "2026-06-04"
+      },
+      {
+        "at": "2026-06-04T12:26:11Z",
+        "by": "aak1247",
+        "status": "RESOLVED",
+        "action": "Verified OpenAI 429 reset uses response body resets_in_seconds before x-codex fallback",
+        "note": "Fix: handle429 now parses OpenAI response body resets_at/resets_in_seconds before calculateOpenAI429ResetTime(headers). Targeted regression passed: cd backend && go test ./internal/service -run TestHandle429_OpenAIPrefersBodyResetsInSecondsOverCodexHeaders -count=1",
+        "next_check_date": "2026-06-04"
+      },
+      {
+        "at": "2026-06-04T12:26:11Z",
+        "by": "aak1247",
+        "status": "ARCHIVED",
+        "action": "Archive bug with automated regression test",
+        "note": ""
+      }
+    ]
+  },
+  "resolution": {
+    "root_cause": "",
+    "fix_summary": "",
+    "pr_url": "",
+    "commit": "",
+    "resolved_at": "2026-06-04T12:26:11Z"
+  },
+  "regression_test": {
+    "path": "backend/internal/service/ratelimit_openai_reset_test.go",
+    "command": "cd backend && go test ./internal/service -run TestHandle429_OpenAIPrefersBodyResetsInSecondsOverCodexHeaders -count=1",
+    "type": "unit",
+    "framework": "go-test",
+    "last_run_at": "2026-06-04T12:26:11Z",
+    "result": "passed"
+  }
+}
