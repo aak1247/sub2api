@@ -1372,6 +1372,8 @@ type openAIQuotaAutoPauseDecision struct {
 	utilization float64
 }
 
+const openAIQuotaAutoPauseIgnore5hWhen7dUtilizationMax = 0.03
+
 func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) (bool, openAIQuotaAutoPauseDecision) {
 	if account == nil || !account.IsOpenAI() {
 		return false, openAIQuotaAutoPauseDecision{}
@@ -1385,7 +1387,8 @@ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) 
 	disabled7d := resolveAccountExtraBool(account.Extra, "auto_pause_7d_disabled")
 	threshold5h, threshold7d := resolveOpenAIQuotaAutoPauseThresholds(ctx, account)
 	now := time.Now()
-	if !disabled5h && threshold5h > 0 {
+	ignore5h := shouldIgnoreOpenAI5hQuotaAutoPause(account.Extra, now)
+	if !ignore5h && !disabled5h && threshold5h > 0 {
 		if utilization, ok := resolveOpenAIQuotaUtilization(account.Extra, "5h", now); ok && utilization >= threshold5h {
 			return true, openAIQuotaAutoPauseDecision{window: "5h", threshold: threshold5h, utilization: utilization}
 		}
@@ -1396,6 +1399,20 @@ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) 
 		}
 	}
 	return false, openAIQuotaAutoPauseDecision{}
+}
+
+func shouldIgnoreOpenAI5hQuotaAutoPause(extra map[string]any, now time.Time) bool {
+	if len(extra) == 0 {
+		return false
+	}
+	usedPercent, ok := resolveAccountExtraNumber(extra, "codex_7d_used_percent")
+	if !ok || usedPercent < 0 {
+		return false
+	}
+	if openAIQuotaWindowReset(extra, "7d", now) {
+		return false
+	}
+	return usedPercent/100 <= openAIQuotaAutoPauseIgnore5hWhen7dUtilizationMax
 }
 
 // resolveAccountExtraBool reads a bool-like value from account extra, tolerating
