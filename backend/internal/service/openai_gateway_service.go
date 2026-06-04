@@ -139,6 +139,21 @@ func normalizeCodexFiveHourUsedPercent(raw *float64) *float64 {
 	return &used
 }
 
+func codexQuotaSlotIsEmpty(percent *float64, resetAfterSeconds *int, windowMinutes *int) bool {
+	return percent != nil && *percent == 0 &&
+		resetAfterSeconds != nil && *resetAfterSeconds == 0 &&
+		windowMinutes != nil && *windowMinutes == 0
+}
+
+func codexQuotaRawSlotIsEmpty(extra map[string]any, prefix string) bool {
+	percent, hasPercent := resolveAccountExtraNumber(extra, "codex_"+prefix+"_used_percent")
+	resetAfterSeconds, hasResetAfterSeconds := resolveAccountExtraNumber(extra, "codex_"+prefix+"_reset_after_seconds")
+	windowMinutes, hasWindowMinutes := resolveAccountExtraNumber(extra, "codex_"+prefix+"_window_minutes")
+	return hasPercent && percent == 0 &&
+		hasResetAfterSeconds && resetAfterSeconds == 0 &&
+		hasWindowMinutes && windowMinutes == 0
+}
+
 // Normalize converts primary/secondary fields to canonical 5h/7d fields.
 // Strategy: Compare window_minutes to determine which is 5h vs 7d.
 // Returns nil if snapshot is nil or has no useful data.
@@ -154,11 +169,14 @@ func (s *OpenAICodexUsageSnapshot) Normalize() *NormalizedCodexLimits {
 	hasPrimaryWindow := false
 	hasSecondaryWindow := false
 
-	if s.PrimaryWindowMinutes != nil {
+	primaryEmpty := codexQuotaSlotIsEmpty(s.PrimaryUsedPercent, s.PrimaryResetAfterSeconds, s.PrimaryWindowMinutes)
+	secondaryEmpty := codexQuotaSlotIsEmpty(s.SecondaryUsedPercent, s.SecondaryResetAfterSeconds, s.SecondaryWindowMinutes)
+
+	if s.PrimaryWindowMinutes != nil && *s.PrimaryWindowMinutes > 0 {
 		primaryMins = *s.PrimaryWindowMinutes
 		hasPrimaryWindow = true
 	}
-	if s.SecondaryWindowMinutes != nil {
+	if s.SecondaryWindowMinutes != nil && *s.SecondaryWindowMinutes > 0 {
 		secondaryMins = *s.SecondaryWindowMinutes
 		hasSecondaryWindow = true
 	}
@@ -197,19 +215,27 @@ func (s *OpenAICodexUsageSnapshot) Normalize() *NormalizedCodexLimits {
 
 	// Assign values
 	if use5hFromPrimary {
-		result.Used5hPercent = normalizeCodexFiveHourUsedPercent(s.PrimaryUsedPercent)
-		result.Reset5hSeconds = s.PrimaryResetAfterSeconds
-		result.Window5hMinutes = s.PrimaryWindowMinutes
-		result.Used7dPercent = s.SecondaryUsedPercent
-		result.Reset7dSeconds = s.SecondaryResetAfterSeconds
-		result.Window7dMinutes = s.SecondaryWindowMinutes
+		if !primaryEmpty {
+			result.Used5hPercent = normalizeCodexFiveHourUsedPercent(s.PrimaryUsedPercent)
+			result.Reset5hSeconds = s.PrimaryResetAfterSeconds
+			result.Window5hMinutes = s.PrimaryWindowMinutes
+		}
+		if !secondaryEmpty {
+			result.Used7dPercent = s.SecondaryUsedPercent
+			result.Reset7dSeconds = s.SecondaryResetAfterSeconds
+			result.Window7dMinutes = s.SecondaryWindowMinutes
+		}
 	} else if use7dFromPrimary {
-		result.Used7dPercent = s.PrimaryUsedPercent
-		result.Reset7dSeconds = s.PrimaryResetAfterSeconds
-		result.Window7dMinutes = s.PrimaryWindowMinutes
-		result.Used5hPercent = normalizeCodexFiveHourUsedPercent(s.SecondaryUsedPercent)
-		result.Reset5hSeconds = s.SecondaryResetAfterSeconds
-		result.Window5hMinutes = s.SecondaryWindowMinutes
+		if !primaryEmpty {
+			result.Used7dPercent = s.PrimaryUsedPercent
+			result.Reset7dSeconds = s.PrimaryResetAfterSeconds
+			result.Window7dMinutes = s.PrimaryWindowMinutes
+		}
+		if !secondaryEmpty {
+			result.Used5hPercent = normalizeCodexFiveHourUsedPercent(s.SecondaryUsedPercent)
+			result.Reset5hSeconds = s.SecondaryResetAfterSeconds
+			result.Window5hMinutes = s.SecondaryWindowMinutes
+		}
 	}
 
 	return result
@@ -1343,15 +1369,7 @@ func isOpenAIAccountEligibleForRequest(ctx context.Context, account *Account, re
 	if account == nil || !account.IsOpenAI() || !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
 		return false
 	}
-	if paused, reason := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
-		// Debug level: this fires per-candidate on the scheduling hot path, so Info
-		// would amplify into log spam once several accounts cross the threshold.
-		slog.Debug("account_auto_paused_by_quota",
-			"account_id", account.ID,
-			"window", reason.window,
-			"threshold", reason.threshold,
-			"utilization", reason.utilization,
-		)
+	if paused, _ := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
 		return false
 	}
 	if requestedModel != "" && !account.IsModelSupported(requestedModel) {
@@ -1366,10 +1384,96 @@ func isOpenAIAccountEligibleForRequest(ctx context.Context, account *Account, re
 	return true
 }
 
+func (s *OpenAIGatewayService) isOpenAIAccountEligibleForRequest(ctx context.Context, account *Account, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) bool {
+	if account == nil || !account.IsOpenAI() || !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
+		return false
+	}
+	if paused, reason := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
+		s.applyOpenAIQuotaAutoPauseRateLimit(ctx, account, reason)
+		return false
+	}
+	if requestedModel != "" && !account.IsModelSupported(requestedModel) {
+		return false
+	}
+	if !account.SupportsOpenAIEndpointCapability(requiredCapability) {
+		return false
+	}
+	if requireCompact && openAICompactSupportTier(account) == 0 {
+		return false
+	}
+	return true
+}
+
+func (s *OpenAIGatewayService) applyOpenAIQuotaAutoPauseRateLimit(ctx context.Context, account *Account, reason openAIQuotaAutoPauseDecision) {
+	if s == nil || account == nil || account.ID <= 0 {
+		return
+	}
+	now := time.Now()
+	resetAt := reason.resetAt
+	if resetAt == nil || !resetAt.After(now) {
+		fallback := now.Add(openAIStopSchedulingBridgeCooldown)
+		resetAt = &fallback
+	}
+
+	s.BlockAccountScheduling(account, *resetAt, "quota_auto_pause")
+	if s.accountRepo != nil && (account.RateLimitResetAt == nil || !account.RateLimitResetAt.After(now)) {
+		if err := s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt); err != nil {
+			slog.Warn("openai_quota_auto_pause_rate_limit_persist_failed",
+				"account_id", account.ID,
+				"window", reason.window,
+				"threshold", reason.threshold,
+				"utilization", reason.utilization,
+				"reset_at", *resetAt,
+				"error", err,
+			)
+			return
+		}
+	}
+	account.RateLimitResetAt = resetAt
+	slog.Info("openai_quota_auto_paused_account",
+		"account_id", account.ID,
+		"window", reason.window,
+		"threshold", reason.threshold,
+		"utilization", reason.utilization,
+		"reset_at", *resetAt,
+	)
+}
+
+func (s *OpenAIGatewayService) maybeApplyOpenAIQuotaAutoPauseRateLimit(ctx context.Context, account *Account) bool {
+	if paused, reason := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
+		s.applyOpenAIQuotaAutoPauseRateLimit(ctx, account, reason)
+		return true
+	}
+	return false
+}
+
+func logOpenAIQuotaAutoPauseSkip(account *Account, reason openAIQuotaAutoPauseDecision) {
+	if account == nil {
+		return
+	}
+	if reason.resetAt != nil {
+		slog.Debug("account_auto_paused_by_quota",
+			"account_id", account.ID,
+			"window", reason.window,
+			"threshold", reason.threshold,
+			"utilization", reason.utilization,
+			"reset_at", *reason.resetAt,
+		)
+		return
+	}
+	slog.Debug("account_auto_paused_by_quota",
+		"account_id", account.ID,
+		"window", reason.window,
+		"threshold", reason.threshold,
+		"utilization", reason.utilization,
+	)
+}
+
 type openAIQuotaAutoPauseDecision struct {
 	window      string
 	threshold   float64
 	utilization float64
+	resetAt     *time.Time
 }
 
 const openAIQuotaAutoPauseIgnore5hWhen7dUtilizationMax = 0.03
@@ -1390,29 +1494,20 @@ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) 
 	ignore5h := shouldIgnoreOpenAI5hQuotaAutoPause(account.Extra, now)
 	if !ignore5h && !disabled5h && threshold5h > 0 {
 		if utilization, ok := resolveOpenAIQuotaUtilization(account.Extra, "5h", now); ok && utilization >= threshold5h {
-			return true, openAIQuotaAutoPauseDecision{window: "5h", threshold: threshold5h, utilization: utilization}
+			return true, openAIQuotaAutoPauseDecision{window: "5h", threshold: threshold5h, utilization: utilization, resetAt: resolveOpenAIQuotaResetAt(account.Extra, "5h", now)}
 		}
 	}
 	if !disabled7d && threshold7d > 0 {
 		if utilization, ok := resolveOpenAIQuotaUtilization(account.Extra, "7d", now); ok && utilization >= threshold7d {
-			return true, openAIQuotaAutoPauseDecision{window: "7d", threshold: threshold7d, utilization: utilization}
+			return true, openAIQuotaAutoPauseDecision{window: "7d", threshold: threshold7d, utilization: utilization, resetAt: resolveOpenAIQuotaResetAt(account.Extra, "7d", now)}
 		}
 	}
 	return false, openAIQuotaAutoPauseDecision{}
 }
 
 func shouldIgnoreOpenAI5hQuotaAutoPause(extra map[string]any, now time.Time) bool {
-	if len(extra) == 0 {
-		return false
-	}
-	usedPercent, ok := resolveAccountExtraNumber(extra, "codex_7d_used_percent")
-	if !ok || usedPercent < 0 {
-		return false
-	}
-	if openAIQuotaWindowReset(extra, "7d", now) {
-		return false
-	}
-	return usedPercent/100 <= openAIQuotaAutoPauseIgnore5hWhen7dUtilizationMax
+	utilization, ok := resolveOpenAIQuotaUtilizationAllowZero(extra, "7d", now)
+	return ok && utilization <= openAIQuotaAutoPauseIgnore5hWhen7dUtilizationMax
 }
 
 // resolveAccountExtraBool reads a bool-like value from account extra, tolerating
@@ -1507,8 +1602,19 @@ func resolveAccountExtraNumber(extra map[string]any, keys ...string) (float64, b
 // without this check an old used_percent would keep the account paused forever even
 // after the real window reset.
 func resolveOpenAIQuotaUtilization(extra map[string]any, window string, now time.Time) (float64, bool) {
-	usedPercent := readOpenAIQuotaUsedPercent(extra, window)
-	if usedPercent <= 0 {
+	utilization, ok := resolveOpenAIQuotaUtilizationAllowZero(extra, window, now)
+	if !ok || utilization <= 0 {
+		return 0, false
+	}
+	return utilization, true
+}
+
+func resolveOpenAIQuotaUtilizationAllowZero(extra map[string]any, window string, now time.Time) (float64, bool) {
+	if openAIQuotaWindowHasEmptyRawSlot(extra, window) {
+		return 0, false
+	}
+	usedPercent, ok := resolveAccountExtraNumber(extra, "codex_"+window+"_used_percent")
+	if !ok || usedPercent < 0 {
 		return 0, false
 	}
 	if openAIQuotaWindowReset(extra, window, now) {
@@ -1517,22 +1623,82 @@ func resolveOpenAIQuotaUtilization(extra map[string]any, window string, now time
 	return usedPercent / 100, true
 }
 
+func openAIQuotaWindowHasEmptyRawSlot(extra map[string]any, window string) bool {
+	if len(extra) == 0 {
+		return false
+	}
+	primaryEmpty := codexQuotaRawSlotIsEmpty(extra, "primary")
+	secondaryEmpty := codexQuotaRawSlotIsEmpty(extra, "secondary")
+	if !primaryEmpty && !secondaryEmpty {
+		return false
+	}
+
+	primaryMins, hasPrimaryWindow := resolveAccountExtraNumber(extra, "codex_primary_window_minutes")
+	secondaryMins, hasSecondaryWindow := resolveAccountExtraNumber(extra, "codex_secondary_window_minutes")
+	hasPrimaryWindow = hasPrimaryWindow && primaryMins > 0
+	hasSecondaryWindow = hasSecondaryWindow && secondaryMins > 0
+
+	use5hFromPrimary := false
+	use7dFromPrimary := false
+	if hasPrimaryWindow && hasSecondaryWindow {
+		if primaryMins < secondaryMins {
+			use5hFromPrimary = true
+		} else {
+			use7dFromPrimary = true
+		}
+	} else if hasPrimaryWindow {
+		if primaryMins <= 360 {
+			use5hFromPrimary = true
+		} else {
+			use7dFromPrimary = true
+		}
+	} else if hasSecondaryWindow {
+		if secondaryMins <= 360 {
+			use7dFromPrimary = true
+		} else {
+			use5hFromPrimary = true
+		}
+	} else {
+		use7dFromPrimary = true
+	}
+
+	switch window {
+	case "5h":
+		if use5hFromPrimary {
+			return primaryEmpty
+		}
+		return secondaryEmpty
+	case "7d":
+		if use7dFromPrimary {
+			return primaryEmpty
+		}
+		return secondaryEmpty
+	default:
+		return false
+	}
+}
+
 // openAIQuotaWindowReset reports whether the Codex usage window's reset time has
 // already passed relative to now. It prefers the absolute codex_<window>_reset_at
 // timestamp and falls back to codex_<window>_reset_after_seconds anchored at
 // codex_usage_updated_at, mirroring AccountUsageService's window-progress logic.
 func openAIQuotaWindowReset(extra map[string]any, window string, now time.Time) bool {
+	resetAt := resolveOpenAIQuotaResetAt(extra, window, now)
+	return resetAt != nil && !now.Before(*resetAt)
+}
+
+func resolveOpenAIQuotaResetAt(extra map[string]any, window string, now time.Time) *time.Time {
 	if len(extra) == 0 {
-		return false
+		return nil
 	}
 	if resetAtRaw, ok := extra["codex_"+window+"_reset_at"]; ok {
 		if resetAt, err := parseTime(fmt.Sprint(resetAtRaw)); err == nil {
-			return !now.Before(resetAt)
+			return &resetAt
 		}
 	}
 	resetAfter := parseExtraInt(extra["codex_"+window+"_reset_after_seconds"])
 	if resetAfter <= 0 {
-		return false
+		return nil
 	}
 	base := now
 	if updatedRaw, ok := extra["codex_usage_updated_at"]; ok {
@@ -1541,7 +1707,7 @@ func openAIQuotaWindowReset(extra map[string]any, window string, now time.Time) 
 		}
 	}
 	resetAt := base.Add(time.Duration(resetAfter) * time.Second)
-	return !now.Before(resetAt)
+	return &resetAt
 }
 
 func readOpenAIQuotaUsedPercent(extra map[string]any, window string) float64 {
@@ -1699,7 +1865,7 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 
 	// 验证账号是否可用于当前请求
 	// Verify account is usable for current request
-	if !isOpenAIAccountEligibleForRequest(ctx, account, requestedModel, false, requiredCapability) {
+	if !s.isOpenAIAccountEligibleForRequest(ctx, account, requestedModel, false, requiredCapability) {
 		return nil
 	}
 	if s.isOpenAIAccountRuntimeBlocked(account) {
@@ -1899,7 +2065,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 				if clearSticky {
 					_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 				}
-				if !clearSticky && isOpenAIAccountEligibleForRequest(ctx, account, requestedModel, false, requiredCapability) {
+				if !clearSticky && s.isOpenAIAccountEligibleForRequest(ctx, account, requestedModel, false, requiredCapability) {
 					account = s.recheckSelectedOpenAIAccountFromDB(ctx, account, requestedModel, requireCompact, requiredCapability)
 					if account == nil {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
@@ -1944,7 +2110,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		// Scheduler snapshots can be temporarily stale (bucket rebuild is throttled);
 		// re-check schedulability here so recently rate-limited/overloaded accounts
 		// are not selected again before the bucket is rebuilt.
-		if !isOpenAIAccountEligibleForRequest(ctx, acc, requestedModel, false, requiredCapability) {
+		if !s.isOpenAIAccountEligibleForRequest(ctx, acc, requestedModel, false, requiredCapability) {
 			continue
 		}
 		if s.isOpenAIAccountRuntimeBlocked(acc) {
@@ -1988,26 +2154,9 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			return nil, false, nil
 		}
 
-		sort.SliceStable(available, func(i, j int) bool {
-			a, b := available[i], available[j]
-			if a.account.Priority != b.account.Priority {
-				return a.account.Priority < b.account.Priority
-			}
-			if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
-				return a.loadInfo.LoadRate < b.loadInfo.LoadRate
-			}
-			switch {
-			case a.account.LastUsedAt == nil && b.account.LastUsedAt != nil:
-				return true
-			case a.account.LastUsedAt != nil && b.account.LastUsedAt == nil:
-				return false
-			case a.account.LastUsedAt == nil && b.account.LastUsedAt == nil:
-				return false
-			default:
-				return a.account.LastUsedAt.Before(*b.account.LastUsedAt)
-			}
-		})
-		shuffleWithinSortGroups(available)
+		sortNow := time.Now()
+		sortOpenAIAccountsByLoadResetAndFallback(available, sortNow)
+		shuffleWithinOpenAIEquivalentSortGroups(available, sortNow)
 
 		selectionOrder := make([]accountWithLoad, 0, len(available))
 		if requireCompact {
@@ -2055,6 +2204,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		return nil, true, nil
 	}
 
+	var fallbackLoadMap map[int64]*AccountLoadInfo
 	loadMap, err := s.concurrencyService.GetAccountsLoadBatch(ctx, accountLoads)
 	if err != nil {
 		ordered := append([]*Account(nil), candidates...)
@@ -2087,12 +2237,14 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			}
 		}
 	} else {
+		fallbackLoadMap = loadMap
 		if selection, attempted, selectErr := tryAcquireFromLoadMap(loadMap); selectErr != nil {
 			return nil, selectErr
 		} else if selection != nil {
 			return selection, nil
 		} else if attempted {
 			if freshLoadMap, loadErr := s.concurrencyService.GetAccountsLoadBatchFresh(ctx, accountLoads); loadErr == nil {
+				fallbackLoadMap = freshLoadMap
 				if selection, _, selectErr := tryAcquireFromLoadMap(freshLoadMap); selectErr != nil {
 					return nil, selectErr
 				} else if selection != nil {
@@ -2103,7 +2255,11 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	}
 
 	// ============ Layer 3: Fallback wait ============
-	sortAccountsByPriorityAndLastUsed(candidates, false)
+	if fallbackLoadMap != nil {
+		candidates = sortOpenAIAccountsByLoadResetAndFallbackMap(candidates, fallbackLoadMap, time.Now())
+	} else {
+		sortAccountsByPriorityAndLastUsed(candidates, false)
+	}
 	if requireCompact {
 		candidates = prioritizeOpenAICompactAccounts(candidates)
 	}
@@ -2131,6 +2287,119 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		return nil, ErrNoAvailableCompactAccounts
 	}
 	return nil, ErrNoAvailableAccounts
+}
+
+func sortOpenAIAccountsByLoadResetAndFallback(accounts []accountWithLoad, now time.Time) {
+	sort.SliceStable(accounts, func(i, j int) bool {
+		return openAIAccountWithLoadLess(accounts[i], accounts[j], now)
+	})
+}
+
+func sortOpenAIAccountsByLoadResetAndFallbackMap(accounts []*Account, loadMap map[int64]*AccountLoadInfo, now time.Time) []*Account {
+	items := make([]accountWithLoad, 0, len(accounts))
+	for _, account := range accounts {
+		if account == nil {
+			continue
+		}
+		loadInfo := loadMap[account.ID]
+		if loadInfo == nil {
+			loadInfo = &AccountLoadInfo{AccountID: account.ID}
+		}
+		items = append(items, accountWithLoad{
+			account:  account,
+			loadInfo: loadInfo,
+		})
+	}
+	sortOpenAIAccountsByLoadResetAndFallback(items, now)
+	out := make([]*Account, 0, len(items))
+	for _, item := range items {
+		out = append(out, item.account)
+	}
+	return out
+}
+
+func openAIAccountWithLoadLess(a, b accountWithLoad, now time.Time) bool {
+	if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
+		return a.loadInfo.LoadRate < b.loadInfo.LoadRate
+	}
+	aReset := openAIQuotaResetSortKey(a.account, now)
+	bReset := openAIQuotaResetSortKey(b.account, now)
+	if !aReset.Equal(bReset) {
+		return aReset.Before(bReset)
+	}
+	if a.account.Priority != b.account.Priority {
+		return a.account.Priority < b.account.Priority
+	}
+	switch {
+	case a.account.LastUsedAt == nil && b.account.LastUsedAt != nil:
+		return true
+	case a.account.LastUsedAt != nil && b.account.LastUsedAt == nil:
+		return false
+	case a.account.LastUsedAt == nil && b.account.LastUsedAt == nil:
+		return false
+	default:
+		return a.account.LastUsedAt.Before(*b.account.LastUsedAt)
+	}
+}
+
+func openAIQuotaResetSortKey(account *Account, now time.Time) time.Time {
+	if account == nil {
+		return openAIQuotaResetSortKeyLast()
+	}
+	var nearest time.Time
+	found := false
+	for _, window := range []string{"5h", "7d"} {
+		resetAt := resolveOpenAIQuotaResetAt(account.Extra, window, now)
+		if resetAt == nil || !resetAt.After(now) {
+			continue
+		}
+		if !found || resetAt.Before(nearest) {
+			nearest = *resetAt
+			found = true
+		}
+	}
+	if !found {
+		return openAIQuotaResetSortKeyLast()
+	}
+	return nearest
+}
+
+func openAIQuotaResetSortKeyLast() time.Time {
+	return time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC)
+}
+
+func shuffleWithinOpenAIEquivalentSortGroups(accounts []accountWithLoad, now time.Time) {
+	if len(accounts) <= 1 {
+		return
+	}
+	i := 0
+	for i < len(accounts) {
+		j := i + 1
+		for j < len(accounts) && sameOpenAIAccountLoadResetFallbackGroup(accounts[i], accounts[j], now) {
+			j++
+		}
+		if j-i > 1 {
+			rand.Shuffle(j-i, func(a, b int) {
+				accounts[i+a], accounts[i+b] = accounts[i+b], accounts[i+a]
+			})
+		}
+		i = j
+	}
+}
+
+func sameOpenAIAccountLoadResetFallbackGroup(a, b accountWithLoad, now time.Time) bool {
+	if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
+		return false
+	}
+	aReset := openAIQuotaResetSortKey(a.account, now)
+	bReset := openAIQuotaResetSortKey(b.account, now)
+	if !aReset.Truncate(time.Second).Equal(bReset.Truncate(time.Second)) {
+		return false
+	}
+	if a.account.Priority != b.account.Priority {
+		return false
+	}
+	return sameLastUsedAt(a.account.LastUsedAt, b.account.LastUsedAt)
 }
 
 func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64) ([]Account, error) {
@@ -2174,7 +2443,7 @@ func (s *OpenAIGatewayService) resolveFreshSchedulableOpenAIAccount(ctx context.
 		fresh = current
 	}
 
-	if !isOpenAIAccountEligibleForRequest(ctx, fresh, requestedModel, requireCompact, requiredCapability) {
+	if !s.isOpenAIAccountEligibleForRequest(ctx, fresh, requestedModel, requireCompact, requiredCapability) {
 		return nil
 	}
 	if s.isOpenAIAccountRuntimeBlocked(fresh) {
@@ -2188,7 +2457,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 		return nil
 	}
 	if s.schedulerSnapshot == nil || s.accountRepo == nil {
-		if !isOpenAIAccountEligibleForRequest(ctx, account, requestedModel, requireCompact, requiredCapability) {
+		if !s.isOpenAIAccountEligibleForRequest(ctx, account, requestedModel, requireCompact, requiredCapability) {
 			return nil
 		}
 		return account
@@ -2198,7 +2467,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 	if err != nil || latest == nil {
 		return nil
 	}
-	if !isOpenAIAccountEligibleForRequest(ctx, latest, requestedModel, requireCompact, requiredCapability) {
+	if !s.isOpenAIAccountEligibleForRequest(ctx, latest, requestedModel, requireCompact, requiredCapability) {
 		return nil
 	}
 	if s.isOpenAIAccountRuntimeBlocked(latest) {

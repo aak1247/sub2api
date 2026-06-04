@@ -978,7 +978,12 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatible(ctx context.C
 	// TopK candidate pool can be filled with paused accounts and the later fresh/DB
 	// rechecks won't reach healthy accounts that fell outside TopK — manifesting as
 	// "no available accounts" even though healthy ones exist.
-	if paused, _ := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
+	if s != nil && s.service != nil {
+		if s.service.maybeApplyOpenAIQuotaAutoPauseRateLimit(ctx, account) {
+			return false
+		}
+	} else if paused, reason := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
+		logOpenAIQuotaAutoPauseSkip(account, reason)
 		return false
 	}
 	if req.RequestedModel != "" && !account.IsModelSupported(req.RequestedModel) {

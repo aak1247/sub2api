@@ -1,0 +1,86 @@
+{
+  "format_version": 1,
+  "bug_id": "BUG-20260603-USAGE-ZERO-WINDOW",
+  "title": "Empty usage window displays stale utilization",
+  "status": "ARCHIVED",
+  "scope": "BACKEND",
+  "severity": "S2",
+  "priority": "P2",
+  "reporter": "aak1247",
+  "assignee": "codex",
+  "created_at": "2026-06-03T11:38:31Z",
+  "updated_at": "2026-06-03T11:38:45Z",
+  "impact_modules": [
+    "backend/account_usage",
+    "frontend/account_usage"
+  ],
+  "impact_summary": "",
+  "environment": "local, 2026-06-03",
+  "tags": [],
+  "links": {
+    "issue_url": "",
+    "pr_url": "",
+    "commit": ""
+  },
+  "reproduction": {
+    "preconditions": [
+      "OpenAI OAuth account has codex usage snapshot",
+      "window stats for 5h/7d are all zero"
+    ],
+    "steps": [
+      "load account usage API",
+      "render account usage progress bar"
+    ],
+    "e2e_full_flow": [],
+    "expected": "zero request/token/cost window is shown as 0% and available now",
+    "actual": "stale codex utilization such as 99% is returned/displayed",
+    "attempts": 1,
+    "successes": 1,
+    "probability": "100.0%",
+    "notes": ""
+  },
+  "tracking": {
+    "next_check_date": "2026-06-03",
+    "blockers": [],
+    "latest_push_action": "",
+    "progress": [
+      {
+        "at": "2026-06-03T11:38:31Z",
+        "by": "aak1247",
+        "status": "REPRODUCED",
+        "action": "Bug intake completed and saved",
+        "note": "Capture bug basics and reproduction signals"
+      },
+      {
+        "at": "2026-06-03T11:38:38Z",
+        "by": "aak1247",
+        "status": "RESOLVED",
+        "action": "Fix landed in backend normalization and frontend defensive display; targeted tests passed.",
+        "note": "Backend zeroes stale Codex utilization when account window stats are empty; frontend UsageProgressBar applies the same defensive rule.",
+        "next_check_date": "2026-06-03"
+      },
+      {
+        "at": "2026-06-03T11:38:45Z",
+        "by": "aak1247",
+        "status": "ARCHIVED",
+        "action": "Archive bug with automated regression test",
+        "note": ""
+      }
+    ]
+  },
+  "resolution": {
+    "root_cause": "",
+    "fix_summary": "",
+    "pr_url": "",
+    "commit": "",
+    "resolved_at": "2026-06-03T11:38:45Z"
+  },
+  "regression_test": {
+    "path": "backend/internal/service/account_usage_service_test.go",
+    "command": "cd backend && go test ./internal/service -run 'TestAccountUsageService_GetOpenAIUsage_EmptyWindowStatsZeroesSnapshotUtilization|TestBuildCodexUsageProgressFromExtra|TestAccountUsageService_GetOpenAIUsage_DoesNotPromoteCodexExtraToRateLimit'",
+    "type": "unit",
+    "framework": "go-test",
+    "last_run_at": "2026-06-03T11:38:45Z",
+    "result": "passed"
+  }
+}

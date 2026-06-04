@@ -35,6 +35,20 @@ type snapshotUpdateAccountRepo struct {
 	updateExtraCalls chan map[string]any
 }
 
+type quotaAutoPauseAccountRepo struct {
+	stubOpenAIAccountRepo
+	setRateLimitedID      int64
+	setRateLimitedResetAt time.Time
+	setRateLimitedCalls   int
+}
+
+func (r *quotaAutoPauseAccountRepo) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
+	r.setRateLimitedID = id
+	r.setRateLimitedResetAt = resetAt
+	r.setRateLimitedCalls++
+	return nil
+}
+
 func (r *snapshotUpdateAccountRepo) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
 	if r.updateExtraCalls != nil {
 		copied := make(map[string]any, len(updates))
@@ -77,6 +91,10 @@ func (r stubOpenAIAccountRepo) ListSchedulableByPlatform(ctx context.Context, pl
 
 func (r stubOpenAIAccountRepo) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]Account, error) {
 	return r.ListSchedulableByPlatform(ctx, platform)
+}
+
+func (r stubOpenAIAccountRepo) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
+	return nil
 }
 
 type stubConcurrencyCache struct {
@@ -730,6 +748,265 @@ func TestOpenAISelectAccountWithLoadAwareness_PrefersLowerLoad(t *testing.T) {
 	}
 	if cache.sessionBindings["openai:load"] != 2 {
 		t.Fatalf("expected sticky session updated")
+	}
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_LoadBeatsResetTime(t *testing.T) {
+	groupID := int64(1)
+	now := time.Now().UTC()
+	repo := stubOpenAIAccountRepo{
+		accounts: []Account{
+			{
+				ID:          1,
+				Platform:    PlatformOpenAI,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Priority:    1,
+				Extra: map[string]any{
+					"codex_5h_reset_at": now.Add(5 * time.Minute).Format(time.RFC3339),
+				},
+			},
+			{
+				ID:          2,
+				Platform:    PlatformOpenAI,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Priority:    1,
+				Extra: map[string]any{
+					"codex_5h_reset_at": now.Add(30 * time.Minute).Format(time.RFC3339),
+				},
+			},
+		},
+	}
+	concurrencyCache := stubConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			1: {AccountID: 1, LoadRate: 80},
+			2: {AccountID: 2, LoadRate: 10},
+		},
+	}
+
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              &stubGatewayCache{},
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "", "gpt-4", nil)
+	if err != nil {
+		t.Fatalf("SelectAccountWithLoadAwareness error: %v", err)
+	}
+	if selection == nil || selection.Account == nil || selection.Account.ID != 2 {
+		t.Fatalf("expected lower-load account 2")
+	}
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_EqualLoadPrefersNearFutureReset(t *testing.T) {
+	groupID := int64(1)
+	now := time.Now().UTC()
+	repo := stubOpenAIAccountRepo{
+		accounts: []Account{
+			{
+				ID:          1,
+				Platform:    PlatformOpenAI,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Priority:    0,
+				Extra: map[string]any{
+					"codex_5h_reset_at": now.Add(2 * time.Hour).Format(time.RFC3339),
+				},
+			},
+			{
+				ID:          2,
+				Platform:    PlatformOpenAI,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Priority:    5,
+				Extra: map[string]any{
+					"codex_5h_reset_at": now.Add(10 * time.Minute).Format(time.RFC3339),
+				},
+			},
+		},
+	}
+	concurrencyCache := stubConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			1: {AccountID: 1, LoadRate: 10},
+			2: {AccountID: 2, LoadRate: 10},
+		},
+	}
+
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              &stubGatewayCache{},
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "", "gpt-4", nil)
+	if err != nil {
+		t.Fatalf("SelectAccountWithLoadAwareness error: %v", err)
+	}
+	if selection == nil || selection.Account == nil || selection.Account.ID != 2 {
+		t.Fatalf("expected account 2 with nearer future reset")
+	}
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_ResetAtNowSortsLast(t *testing.T) {
+	groupID := int64(1)
+	now := time.Now().UTC()
+	repo := stubOpenAIAccountRepo{
+		accounts: []Account{
+			{
+				ID:          1,
+				Platform:    PlatformOpenAI,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Priority:    0,
+				Extra: map[string]any{
+					"codex_5h_reset_at": now.Format(time.RFC3339),
+				},
+			},
+			{
+				ID:          2,
+				Platform:    PlatformOpenAI,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Priority:    5,
+				Extra: map[string]any{
+					"codex_5h_reset_at": now.Add(10 * time.Minute).Format(time.RFC3339),
+				},
+			},
+		},
+	}
+	concurrencyCache := stubConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			1: {AccountID: 1, LoadRate: 10},
+			2: {AccountID: 2, LoadRate: 10},
+		},
+	}
+
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              &stubGatewayCache{},
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "", "gpt-4", nil)
+	if err != nil {
+		t.Fatalf("SelectAccountWithLoadAwareness error: %v", err)
+	}
+	if selection == nil || selection.Account == nil || selection.Account.ID != 2 {
+		t.Fatalf("expected account 2 because account 1 reset_at is current/past and sorts last")
+	}
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_PastResetAtSortsLast(t *testing.T) {
+	groupID := int64(1)
+	now := time.Now().UTC()
+	repo := stubOpenAIAccountRepo{
+		accounts: []Account{
+			{
+				ID:          1,
+				Platform:    PlatformOpenAI,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Priority:    0,
+				Extra: map[string]any{
+					"codex_5h_reset_at": now.Add(-10 * time.Minute).Format(time.RFC3339),
+				},
+			},
+			{
+				ID:          2,
+				Platform:    PlatformOpenAI,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Priority:    5,
+				Extra: map[string]any{
+					"codex_5h_reset_at": now.Add(10 * time.Minute).Format(time.RFC3339),
+				},
+			},
+		},
+	}
+	concurrencyCache := stubConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			1: {AccountID: 1, LoadRate: 10},
+			2: {AccountID: 2, LoadRate: 10},
+		},
+	}
+
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              &stubGatewayCache{},
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "", "gpt-4", nil)
+	if err != nil {
+		t.Fatalf("SelectAccountWithLoadAwareness error: %v", err)
+	}
+	if selection == nil || selection.Account == nil || selection.Account.ID != 2 {
+		t.Fatalf("expected account 2 because account 1 past reset_at sorts last")
+	}
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_StickyBeatsLoadAndResetTime(t *testing.T) {
+	groupID := int64(1)
+	sessionHash := "sticky-load-reset"
+	now := time.Now().UTC()
+	repo := stubOpenAIAccountRepo{
+		accounts: []Account{
+			{
+				ID:          1,
+				Platform:    PlatformOpenAI,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Priority:    5,
+				Extra: map[string]any{
+					"codex_5h_reset_at": now.Add(2 * time.Hour).Format(time.RFC3339),
+				},
+			},
+			{
+				ID:          2,
+				Platform:    PlatformOpenAI,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Priority:    0,
+				Extra: map[string]any{
+					"codex_5h_reset_at": now.Add(10 * time.Minute).Format(time.RFC3339),
+				},
+			},
+		},
+	}
+	cache := &stubGatewayCache{
+		sessionBindings: map[string]int64{"openai:" + sessionHash: 1},
+	}
+	concurrencyCache := stubConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			1: {AccountID: 1, LoadRate: 90},
+			2: {AccountID: 2, LoadRate: 10},
+		},
+	}
+
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              cache,
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, sessionHash, "gpt-4", nil)
+	if err != nil {
+		t.Fatalf("SelectAccountWithLoadAwareness error: %v", err)
+	}
+	if selection == nil || selection.Account == nil || selection.Account.ID != 1 {
+		t.Fatalf("expected sticky account 1 before load/reset sorting")
 	}
 }
 

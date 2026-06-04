@@ -109,9 +109,9 @@ const labelClass = computed(() => {
 
 // Progress bar color based on utilization
 const barClass = computed(() => {
-  if (props.utilization >= 100) {
+  if (effectiveUtilization.value >= 100) {
     return 'bg-red-500'
-  } else if (props.utilization >= 80) {
+  } else if (effectiveUtilization.value >= 80) {
     return 'bg-amber-500'
   } else {
     return 'bg-green-500'
@@ -120,35 +120,52 @@ const barClass = computed(() => {
 
 // Text color based on utilization
 const textClass = computed(() => {
-  if (props.utilization >= 100) {
+  if (effectiveUtilization.value >= 100) {
     return 'text-red-600 dark:text-red-400'
-  } else if (props.utilization >= 80) {
+  } else if (effectiveUtilization.value >= 80) {
     return 'text-amber-600 dark:text-amber-400'
   } else {
     return 'text-gray-600 dark:text-gray-400'
   }
 })
 
+const hasEmptyWindowStats = computed(() => {
+  const stats = props.windowStats
+  if (!stats) return false
+  return (
+    stats.requests === 0 &&
+    stats.tokens === 0 &&
+    stats.cost === 0 &&
+    (stats.standard_cost ?? 0) === 0 &&
+    (stats.user_cost ?? 0) === 0
+  )
+})
+
+const effectiveUtilization = computed(() => {
+  if (hasEmptyWindowStats.value) return 0
+  return props.utilization
+})
+
 // Bar width (capped at 100%)
 const barWidth = computed(() => {
-  return `${Math.min(props.utilization, 100)}%`
+  return `${Math.min(effectiveUtilization.value, 100)}%`
 })
 
 // Display percentage (cap at 999% for readability)
 const displayPercent = computed(() => {
-  const percent = Math.round(props.utilization)
+  const percent = Math.round(effectiveUtilization.value)
   return percent > 999 ? '>999%' : `${percent}%`
 })
 
 const shouldShowResetTime = computed(() => {
   if (props.resetsAt) return true
-  return Boolean(props.showNowWhenIdle && props.utilization <= 0)
+  return Boolean(props.showNowWhenIdle && effectiveUtilization.value <= 0)
 })
 
 // Format reset time
 const formatResetTime = computed(() => {
   // For rolling windows, when utilization is 0%, treat as immediately available.
-  if (props.showNowWhenIdle && props.utilization <= 0) {
+  if (props.showNowWhenIdle && effectiveUtilization.value <= 0) {
     return '现在'
   }
 

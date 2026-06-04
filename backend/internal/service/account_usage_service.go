@@ -533,6 +533,7 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 			usage.FiveHour = &UsageProgress{Utilization: 0}
 		}
 		usage.FiveHour.WindowStats = windowStatsFromAccountStats(stats)
+		normalizeUsageProgressByWindowStats(usage.FiveHour)
 	}
 
 	if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, now.Add(-7*24*time.Hour)); err == nil {
@@ -540,6 +541,7 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 			usage.SevenDay = &UsageProgress{Utilization: 0}
 		}
 		usage.SevenDay.WindowStats = windowStatsFromAccountStats(stats)
+		normalizeUsageProgressByWindowStats(usage.SevenDay)
 	}
 
 	return usage, nil
@@ -1053,6 +1055,19 @@ func windowStatsFromAccountStats(stats *usagestats.AccountStats) *WindowStats {
 		Cost:         stats.Cost,
 		StandardCost: stats.StandardCost,
 		UserCost:     stats.UserCost,
+	}
+}
+
+func normalizeUsageProgressByWindowStats(progress *UsageProgress) {
+	if progress == nil || progress.WindowStats == nil {
+		return
+	}
+	if progress.WindowStats.Requests == 0 &&
+		progress.WindowStats.Tokens == 0 &&
+		progress.WindowStats.Cost == 0 &&
+		progress.WindowStats.StandardCost == 0 &&
+		progress.WindowStats.UserCost == 0 {
+		progress.Utilization = 0
 	}
 }
 

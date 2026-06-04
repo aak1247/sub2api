@@ -1,0 +1,84 @@
+{
+  "format_version": 1,
+  "bug_id": "BUG-20260603-OPENAI-QUOTA-AUTO-PAUSE",
+  "title": "OpenAI quota auto-pause only filtered transiently and did not visibly pause accounts",
+  "status": "ARCHIVED",
+  "scope": "BACKEND",
+  "severity": "S2",
+  "priority": "P2",
+  "reporter": "aak1247",
+  "assignee": "",
+  "created_at": "2026-06-03T10:38:17Z",
+  "updated_at": "2026-06-03T10:48:24Z",
+  "impact_modules": [
+    "openai-gateway",
+    "account-scheduler"
+  ],
+  "impact_summary": "",
+  "environment": "local backend unit test",
+  "tags": [],
+  "links": {
+    "issue_url": "",
+    "pr_url": "",
+    "commit": ""
+  },
+  "reproduction": {
+    "preconditions": [
+      "OpenAI account is active and schedulable",
+      "Codex 5h used percent exceeds configured auto-pause threshold"
+    ],
+    "steps": [
+      "select an OpenAI account for a request"
+    ],
+    "e2e_full_flow": [],
+    "expected": "account is not selected and is persisted as rate-limited until the quota window reset time, without setting a permanent error",
+    "actual": "account was only skipped transiently; account remained schedulable in persistent state",
+    "attempts": 1,
+    "successes": 1,
+    "probability": "100.0%",
+    "notes": ""
+  },
+  "tracking": {
+    "next_check_date": "",
+    "blockers": [],
+    "latest_push_action": "",
+    "progress": [
+      {
+        "at": "2026-06-03T10:38:17Z",
+        "by": "aak1247",
+        "status": "REPRODUCED",
+        "action": "Bug intake completed and saved",
+        "note": "Capture bug basics and reproduction signals"
+      },
+      {
+        "at": "2026-06-03T10:38:17Z",
+        "by": "aak1247",
+        "status": "ARCHIVED",
+        "action": "Archive bug with automated regression test",
+        "note": ""
+      },
+      {
+        "at": "2026-06-03T10:48:24Z",
+        "by": "aak1247",
+        "status": "ARCHIVED",
+        "action": "Correct archive semantics after product clarification",
+        "note": "Quota threshold auto-pause now follows the existing 429 rate-limit flow via rate_limit_reset_at instead of SetError, so scheduling resumes after the reset window."
+      }
+    ]
+  },
+  "resolution": {
+    "root_cause": "OpenAI quota threshold filtering only skipped candidates during selection; sticky previous_response_id and scheduler candidate pools could still keep over-threshold accounts in circulation without recording a temporary reset window.",
+    "fix_summary": "Apply quota auto-pause through SetRateLimited using the Codex quota window reset time, gate previous_response_id and scheduler candidate paths, and keep sticky bindings intact so the chain can resume after reset.",
+    "pr_url": "",
+    "commit": "",
+    "resolved_at": "2026-06-03T10:38:17Z"
+  },
+  "regression_test": {
+    "path": "backend/internal/service/openai_ws_account_sticky_test.go",
+    "command": "cd backend && go test ./internal/service -run 'TestOpenAIGatewayService_SelectAccount_QuotaAutoPauseSetsRateLimitUntilReset'",
+    "type": "unit",
+    "framework": "go-test",
+    "last_run_at": "2026-06-03T10:38:17Z",
+    "result": "passed"
+  }
+}

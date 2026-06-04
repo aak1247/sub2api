@@ -57,6 +57,10 @@ func (r schedulerTestOpenAIAccountRepo) ListSchedulableUngroupedByPlatform(ctx c
 	return r.ListSchedulableByPlatform(ctx, platform)
 }
 
+func (r schedulerTestOpenAIAccountRepo) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
+	return nil
+}
+
 type schedulerTestConcurrencyCache struct {
 	ConcurrencyCache
 	loadBatchErr    error
@@ -895,6 +899,79 @@ func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_UsesGlobalDefa
 	require.NoError(t, err)
 	require.NotNil(t, account)
 	require.Equal(t, int64(35402), account.ID)
+}
+
+func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_EmptyZeroQuotaDoesNotAutoPause(t *testing.T) {
+	ctx := withOpenAIQuotaAutoPauseSettings(context.Background(), OpsOpenAIAccountQuotaAutoPauseSettings{
+		DefaultThreshold5h: 0.95,
+		DefaultThreshold7d: 0.95,
+	})
+	zero := 0.0
+	zeroInt := 0
+	extra := buildCodexUsageExtraUpdates(&OpenAICodexUsageSnapshot{
+		PrimaryUsedPercent:         &zero,
+		PrimaryResetAfterSeconds:   &zeroInt,
+		PrimaryWindowMinutes:       &zeroInt,
+		SecondaryUsedPercent:       &zero,
+		SecondaryResetAfterSeconds: &zeroInt,
+		SecondaryWindowMinutes:     &zeroInt,
+		UpdatedAt:                  time.Now().UTC().Format(time.RFC3339),
+	}, time.Now())
+	require.NotContains(t, extra, "codex_5h_used_percent")
+	require.NotContains(t, extra, "codex_7d_used_percent")
+
+	primary := Account{
+		ID:          35451,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    0,
+		Extra:       extra,
+	}
+	secondary := Account{ID: 35452, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	svc := &OpenAIGatewayService{accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{primary, secondary}}, cfg: &config.Config{}}
+
+	account, err := svc.SelectAccountForModelWithExclusions(ctx, nil, "", "gpt-5.1", nil)
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, int64(35451), account.ID)
+	require.Nil(t, account.RateLimitResetAt)
+}
+
+func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_ExistingBadZeroQuotaCanonicalDoesNotAutoPause(t *testing.T) {
+	ctx := withOpenAIQuotaAutoPauseSettings(context.Background(), OpsOpenAIAccountQuotaAutoPauseSettings{
+		DefaultThreshold5h: 0.95,
+		DefaultThreshold7d: 0.95,
+	})
+	primary := Account{
+		ID:          35461,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    0,
+		Extra: map[string]any{
+			"codex_primary_used_percent":          0.0,
+			"codex_primary_reset_after_seconds":   0,
+			"codex_primary_window_minutes":        0,
+			"codex_secondary_used_percent":        0.0,
+			"codex_secondary_reset_after_seconds": 0,
+			"codex_secondary_window_minutes":      0,
+			"codex_5h_used_percent":               100.0,
+			"codex_7d_used_percent":               100.0,
+		},
+	}
+	secondary := Account{ID: 35462, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	svc := &OpenAIGatewayService{accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{primary, secondary}}, cfg: &config.Config{}}
+
+	account, err := svc.SelectAccountForModelWithExclusions(ctx, nil, "", "gpt-5.1", nil)
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, int64(35461), account.ID)
+	require.Nil(t, account.RateLimitResetAt)
 }
 
 // Regression: a per-account explicit-disable flag exempts the account from auto-pause

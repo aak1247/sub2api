@@ -67,9 +67,16 @@ const DataTableStub = {
   template: `
     <div data-test="data-table">
       <template v-for="column in columns" :key="column.key">
-        <div v-if="column.key === 'usage'" data-test="usage-header">
+        <div v-if="column.key === 'usage_window_refreshed_at'" data-test="usage-header">
           <slot :name="'header-' + column.key" :column="column" />
         </div>
+      </template>
+      <template v-for="row in data" :key="row.id">
+        <template v-for="column in columns" :key="column.key">
+          <div v-if="column.key === 'usage_window_refreshed_at'" data-test="usage-cell">
+            <slot :name="'cell-' + column.key" :row="row" :value="row[column.key]" />
+          </div>
+        </template>
       </template>
     </div>
   `
@@ -114,7 +121,7 @@ function mountView() {
         AccountStatusIndicator: true,
         AccountTodayStatsCell: true,
         AccountGroupsCell: true,
-        AccountUsageCell: true,
+        AccountUsageCell: { template: '<div data-test="account-usage-cell"></div>' },
         Icon: true
       }
     }
@@ -160,5 +167,48 @@ describe('admin AccountsView usage windows hint', () => {
     const hint = wrapper.find('[data-test="usage-windows-hint"]')
     expect(hint.exists()).toBe(true)
     expect(hint.text()).toBe('admin.accounts.usageWindowsHint')
+  })
+
+  it('renders the usage cell on the usage windows column key', async () => {
+    listAccounts.mockResolvedValueOnce({
+      items: [
+        {
+          id: 1,
+          name: 'OpenAI OAuth',
+          platform: 'openai',
+          type: 'oauth',
+          proxy_id: null,
+          concurrency: 1,
+          priority: 0,
+          status: 'active',
+          error_message: null,
+          last_used_at: null,
+          expires_at: null,
+          auto_pause_on_expired: true,
+          created_at: '2026-06-03T00:00:00Z',
+          updated_at: '2026-06-03T00:00:00Z',
+          schedulable: true,
+          rate_limited_at: null,
+          rate_limit_reset_at: null,
+          overload_until: null,
+          temp_unschedulable_until: null,
+          temp_unschedulable_reason: null,
+          session_window_start: null,
+          session_window_end: null,
+          session_window_status: null,
+          groups: []
+        }
+      ],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="usage-cell"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="account-usage-cell"]').exists()).toBe(true)
   })
 })

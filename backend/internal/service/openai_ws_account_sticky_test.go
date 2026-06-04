@@ -88,6 +88,40 @@ func TestOpenAIGatewayService_SelectAccountByPreviousResponseID_QuotaAutoPausedM
 	require.Equal(t, account.ID, boundAccountID)
 }
 
+func TestOpenAIGatewayService_SelectAccount_QuotaAutoPauseSetsRateLimitUntilReset(t *testing.T) {
+	resetAt := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
+	ctx := withOpenAIQuotaAutoPauseSettings(context.Background(), OpsOpenAIAccountQuotaAutoPauseSettings{
+		DefaultThreshold5h: 0.95,
+	})
+	account := Account{
+		ID:          78,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Extra: map[string]any{
+			"codex_5h_used_percent": 96.0,
+			"codex_5h_reset_at":     resetAt.Format(time.RFC3339),
+		},
+	}
+	repo := &quotaAutoPauseAccountRepo{
+		stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{account}},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cfg:                newOpenAIWSV2TestConfig(),
+		concurrencyService: NewConcurrencyService(stubConcurrencyCache{}),
+	}
+
+	selected, err := svc.SelectAccountForModel(ctx, nil, "", "gpt-5.1")
+	require.Error(t, err)
+	require.Nil(t, selected)
+	require.Equal(t, 1, repo.setRateLimitedCalls)
+	require.Equal(t, account.ID, repo.setRateLimitedID)
+	require.WithinDuration(t, resetAt, repo.setRateLimitedResetAt, time.Second)
+}
+
 func TestOpenAIGatewayService_SelectAccountByPreviousResponseID_RateLimitedMiss(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(23)
