@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -14,8 +15,10 @@ import (
 
 // OpenAIOAuthHandler handles OpenAI OAuth-related operations
 type OpenAIOAuthHandler struct {
-	openaiOAuthService *service.OpenAIOAuthService
-	adminService       service.AdminService
+	openaiOAuthService    *service.OpenAIOAuthService
+	adminService          service.AdminService
+	oauthRefreshAPI       *service.OAuthRefreshAPI
+	tokenCacheInvalidator service.TokenCacheInvalidator
 }
 
 func oauthPlatformFromPath(c *gin.Context) string {
@@ -28,6 +31,27 @@ func NewOpenAIOAuthHandler(openaiOAuthService *service.OpenAIOAuthService, admin
 		openaiOAuthService: openaiOAuthService,
 		adminService:       adminService,
 	}
+}
+
+func (h *OpenAIOAuthHandler) SetOAuthRefreshAPI(api *service.OAuthRefreshAPI) {
+	h.oauthRefreshAPI = api
+}
+
+func (h *OpenAIOAuthHandler) SetTokenCacheInvalidator(invalidator service.TokenCacheInvalidator) {
+	h.tokenCacheInvalidator = invalidator
+}
+
+// ProvideOpenAIOAuthHandler creates OpenAIOAuthHandler with OAuthRefreshAPI injection.
+func ProvideOpenAIOAuthHandler(
+	openaiOAuthService *service.OpenAIOAuthService,
+	adminService service.AdminService,
+	oauthRefreshAPI *service.OAuthRefreshAPI,
+	tokenCacheInvalidator service.TokenCacheInvalidator,
+) *OpenAIOAuthHandler {
+	h := NewOpenAIOAuthHandler(openaiOAuthService, adminService)
+	h.SetOAuthRefreshAPI(oauthRefreshAPI)
+	h.SetTokenCacheInvalidator(tokenCacheInvalidator)
+	return h
 }
 
 // OpenAIGenerateAuthURLRequest represents the request for generating OpenAI auth URL
@@ -166,6 +190,33 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 	// Only refresh OAuth-based accounts
 	if !account.IsOAuth() {
 		response.BadRequest(c, "Cannot refresh non-OAuth account credentials")
+		return
+	}
+
+	if h.oauthRefreshAPI != nil {
+		executor, execErr := service.NewOAuthRefreshExecutorForAccount(account, nil, h.openaiOAuthService, nil, nil)
+		if execErr != nil {
+			response.ErrorFrom(c, execErr)
+			return
+		}
+		result, refreshErr := h.oauthRefreshAPI.RefreshForced(c.Request.Context(), account, executor, 0)
+		if refreshErr != nil {
+			response.ErrorFrom(c, refreshErr)
+			return
+		}
+		if result.LockHeld {
+			response.ErrorFrom(c, infraerrors.Conflict("TOKEN_REFRESH_IN_PROGRESS", "token refresh is already in progress"))
+			return
+		}
+		updatedAccount, getErr := h.adminService.GetAccount(c.Request.Context(), accountID)
+		if getErr != nil {
+			response.ErrorFrom(c, getErr)
+			return
+		}
+		if h.tokenCacheInvalidator != nil {
+			_ = h.tokenCacheInvalidator.InvalidateToken(c.Request.Context(), updatedAccount)
+		}
+		response.Success(c, dto.AccountFromService(updatedAccount))
 		return
 	}
 

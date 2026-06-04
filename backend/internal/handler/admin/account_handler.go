@@ -58,6 +58,7 @@ type AccountHandler struct {
 	sessionLimitCache       service.SessionLimitCache
 	rpmCache                service.RPMCache
 	tokenCacheInvalidator   service.TokenCacheInvalidator
+	oauthRefreshAPI         *service.OAuthRefreshAPI
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -91,6 +92,46 @@ func NewAccountHandler(
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
 	}
+}
+
+func (h *AccountHandler) SetOAuthRefreshAPI(api *service.OAuthRefreshAPI) {
+	h.oauthRefreshAPI = api
+}
+
+// ProvideAccountHandler creates AccountHandler with OAuthRefreshAPI injection.
+func ProvideAccountHandler(
+	adminService service.AdminService,
+	oauthService *service.OAuthService,
+	openaiOAuthService *service.OpenAIOAuthService,
+	geminiOAuthService *service.GeminiOAuthService,
+	antigravityOAuthService *service.AntigravityOAuthService,
+	rateLimitService *service.RateLimitService,
+	accountUsageService *service.AccountUsageService,
+	accountTestService *service.AccountTestService,
+	concurrencyService *service.ConcurrencyService,
+	crsSyncService *service.CRSSyncService,
+	sessionLimitCache service.SessionLimitCache,
+	rpmCache service.RPMCache,
+	tokenCacheInvalidator service.TokenCacheInvalidator,
+	oauthRefreshAPI *service.OAuthRefreshAPI,
+) *AccountHandler {
+	h := NewAccountHandler(
+		adminService,
+		oauthService,
+		openaiOAuthService,
+		geminiOAuthService,
+		antigravityOAuthService,
+		rateLimitService,
+		accountUsageService,
+		accountTestService,
+		concurrencyService,
+		crsSyncService,
+		sessionLimitCache,
+		rpmCache,
+		tokenCacheInvalidator,
+	)
+	h.SetOAuthRefreshAPI(oauthRefreshAPI)
+	return h
 }
 
 // CreateAccountRequest represents create account request
@@ -855,6 +896,44 @@ func (h *AccountHandler) PreviewFromCRS(c *gin.Context) {
 func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account) (*service.Account, string, error) {
 	if !account.IsOAuth() {
 		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
+	}
+
+	if h.oauthRefreshAPI != nil {
+		executor, err := service.NewOAuthRefreshExecutorForAccount(
+			account,
+			h.oauthService,
+			h.openaiOAuthService,
+			h.geminiOAuthService,
+			h.antigravityOAuthService,
+		)
+		if err != nil {
+			return nil, "", err
+		}
+		result, err := h.oauthRefreshAPI.RefreshForced(ctx, account, executor, 0)
+		if err != nil {
+			if account.IsOpenAI() {
+				h.adminService.EnsureOpenAIPrivacy(ctx, account)
+			}
+			return nil, "", err
+		}
+		if result.LockHeld {
+			return nil, "", infraerrors.Conflict("TOKEN_REFRESH_IN_PROGRESS", "token refresh is already in progress")
+		}
+		updatedAccount, err := h.adminService.GetAccount(ctx, account.ID)
+		if err != nil {
+			return nil, "", err
+		}
+		if h.tokenCacheInvalidator != nil {
+			if invalidateErr := h.tokenCacheInvalidator.InvalidateToken(ctx, updatedAccount); invalidateErr != nil {
+				log.Printf("[WARN] Failed to invalidate token cache for account %d: %v", updatedAccount.ID, invalidateErr)
+			}
+		}
+		h.adminService.EnsureOpenAIPrivacy(ctx, updatedAccount)
+		h.adminService.EnsureAntigravityPrivacy(ctx, updatedAccount)
+		if updatedAccount.Platform == service.PlatformAntigravity && strings.TrimSpace(updatedAccount.GetCredential("project_id")) == "" {
+			return updatedAccount, "missing_project_id_temporary", nil
+		}
+		return updatedAccount, "", nil
 	}
 
 	var newCredentials map[string]any

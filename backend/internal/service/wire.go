@@ -112,6 +112,21 @@ func ProvideOpenAITokenProvider(
 	return p
 }
 
+// ProvideCRSSyncService creates CRSSyncService with OAuthRefreshAPI injection.
+func ProvideCRSSyncService(
+	accountRepo AccountRepository,
+	proxyRepo ProxyRepository,
+	oauthService *OAuthService,
+	openaiOAuthService *OpenAIOAuthService,
+	geminiOAuthService *GeminiOAuthService,
+	cfg *config.Config,
+	refreshAPI *OAuthRefreshAPI,
+) *CRSSyncService {
+	svc := NewCRSSyncService(accountRepo, proxyRepo, oauthService, openaiOAuthService, geminiOAuthService, cfg)
+	svc.SetOAuthRefreshAPI(refreshAPI)
+	return svc
+}
+
 // ProvideGeminiTokenProvider creates GeminiTokenProvider with OAuthRefreshAPI injection
 func ProvideGeminiTokenProvider(
 	accountRepo AccountRepository,
@@ -552,7 +567,7 @@ var ProviderSet = wire.NewSet(
 	NewUsageRecordWorkerPool,
 	ProvideSchedulerSnapshotService,
 	NewIdentityService,
-	NewCRSSyncService,
+	ProvideCRSSyncService,
 	ProvideUpdateService,
 	ProvideTokenRefreshService,
 	ProvideAccountExpiryService,

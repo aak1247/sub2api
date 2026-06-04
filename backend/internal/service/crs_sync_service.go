@@ -23,6 +23,7 @@ type CRSSyncService struct {
 	oauthService       *OAuthService
 	openaiOAuthService *OpenAIOAuthService
 	geminiOAuthService *GeminiOAuthService
+	oauthRefreshAPI    *OAuthRefreshAPI
 	cfg                *config.Config
 }
 
@@ -42,6 +43,10 @@ func NewCRSSyncService(
 		geminiOAuthService: geminiOAuthService,
 		cfg:                cfg,
 	}
+}
+
+func (s *CRSSyncService) SetOAuthRefreshAPI(api *OAuthRefreshAPI) {
+	s.oauthRefreshAPI = api
 }
 
 type SyncFromCRSInput struct {
@@ -1224,6 +1229,24 @@ func crsExportAccounts(ctx context.Context, client *http.Client, baseURL, adminT
 // Returns updated credentials or nil if refresh failed/not applicable
 func (s *CRSSyncService) refreshOAuthToken(ctx context.Context, account *Account) map[string]any {
 	if account.Type != AccountTypeOAuth {
+		return nil
+	}
+
+	if s.oauthRefreshAPI != nil {
+		executor, execErr := NewOAuthRefreshExecutorForAccount(
+			account,
+			s.oauthService,
+			s.openaiOAuthService,
+			s.geminiOAuthService,
+			nil,
+		)
+		if execErr != nil {
+			return nil
+		}
+		result, refreshErr := s.oauthRefreshAPI.RefreshForced(ctx, account, executor, 0)
+		if refreshErr != nil || result.LockHeld {
+			return nil
+		}
 		return nil
 	}
 
