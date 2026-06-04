@@ -73,6 +73,68 @@ func TestCalculateOpenAI429ResetTime_5hExhausted(t *testing.T) {
 	}
 }
 
+func TestCalculateOpenAI429ResetTime_5hExhaustedIgnoredWhen7dNearZero(t *testing.T) {
+	svc := &RateLimitService{}
+
+	headers := http.Header{}
+	headers.Set("x-codex-primary-used-percent", "3")
+	headers.Set("x-codex-primary-reset-after-seconds", "500000")
+	headers.Set("x-codex-primary-window-minutes", "10080")
+	headers.Set("x-codex-secondary-used-percent", "0")
+	headers.Set("x-codex-secondary-reset-after-seconds", "3600")
+	headers.Set("x-codex-secondary-window-minutes", "300")
+
+	resetAt := svc.calculateOpenAI429ResetTime(headers)
+	if resetAt != nil {
+		t.Fatalf("expected nil resetAt when 7d usage is near zero and only 5h appears exhausted, got %v", resetAt)
+	}
+}
+
+func TestCalculateOpenAI429ResetTime_5hExhaustedIgnoredWhen7dZero(t *testing.T) {
+	svc := &RateLimitService{}
+
+	headers := http.Header{}
+	headers.Set("x-codex-primary-used-percent", "0")
+	headers.Set("x-codex-primary-reset-after-seconds", "500000")
+	headers.Set("x-codex-primary-window-minutes", "10080")
+	headers.Set("x-codex-secondary-used-percent", "0")
+	headers.Set("x-codex-secondary-reset-after-seconds", "3600")
+	headers.Set("x-codex-secondary-window-minutes", "300")
+
+	resetAt := svc.calculateOpenAI429ResetTime(headers)
+	if resetAt != nil {
+		t.Fatalf("expected nil resetAt when 7d usage is zero and only 5h appears exhausted, got %v", resetAt)
+	}
+}
+
+func TestCalculateOpenAI429ResetTime_5hExhaustedNotIgnoredWhen7dAboveNearZero(t *testing.T) {
+	svc := &RateLimitService{}
+
+	headers := http.Header{}
+	headers.Set("x-codex-primary-used-percent", "3.1")
+	headers.Set("x-codex-primary-reset-after-seconds", "500000")
+	headers.Set("x-codex-primary-window-minutes", "10080")
+	headers.Set("x-codex-secondary-used-percent", "0")
+	headers.Set("x-codex-secondary-reset-after-seconds", "3600")
+	headers.Set("x-codex-secondary-window-minutes", "300")
+
+	before := time.Now()
+	resetAt := svc.calculateOpenAI429ResetTime(headers)
+	after := time.Now()
+
+	if resetAt == nil {
+		t.Fatal("expected non-nil resetAt")
+	}
+
+	expectedDuration := 3600 * time.Second
+	minExpected := before.Add(expectedDuration)
+	maxExpected := after.Add(expectedDuration)
+
+	if resetAt.Before(minExpected) || resetAt.After(maxExpected) {
+		t.Errorf("resetAt %v not in expected range [%v, %v]", resetAt, minExpected, maxExpected)
+	}
+}
+
 func TestCalculateOpenAI429ResetTime_NeitherExhausted_UsesMax(t *testing.T) {
 	svc := &RateLimitService{}
 

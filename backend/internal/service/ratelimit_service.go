@@ -1110,6 +1110,8 @@ func calculateOpenAI429ResetTime(headers http.Header) *time.Time {
 	// 判断哪个限制被触发（used_percent >= 100）
 	is7dExhausted := normalized.Used7dPercent != nil && *normalized.Used7dPercent >= 100
 	is5hExhausted := normalized.Used5hPercent != nil && *normalized.Used5hPercent >= 100
+	ignore5h := normalized.Used7dPercent != nil &&
+		(*normalized.Used7dPercent/100) <= openAIQuotaAutoPauseIgnore5hWhen7dUtilizationMax
 
 	// 优先使用被触发限制的重置时间
 	if is7dExhausted && normalized.Reset7dSeconds != nil {
@@ -1117,10 +1119,17 @@ func calculateOpenAI429ResetTime(headers http.Header) *time.Time {
 		slog.Info("openai_429_7d_limit_exhausted", "reset_after_seconds", *normalized.Reset7dSeconds, "reset_at", resetAt)
 		return &resetAt
 	}
-	if is5hExhausted && normalized.Reset5hSeconds != nil {
+	if !ignore5h && is5hExhausted && normalized.Reset5hSeconds != nil {
 		resetAt := now.Add(time.Duration(*normalized.Reset5hSeconds) * time.Second)
 		slog.Info("openai_429_5h_limit_exhausted", "reset_after_seconds", *normalized.Reset5hSeconds, "reset_at", resetAt)
 		return &resetAt
+	}
+	if ignore5h {
+		slog.Warn("openai_429_5h_limit_ignored_due_to_low_7d_usage",
+			"used_5h_percent", normalized.Used5hPercent,
+			"used_7d_percent", normalized.Used7dPercent,
+		)
+		return nil
 	}
 
 	// 都未达到100%但收到429，使用较长的重置时间

@@ -1589,6 +1589,105 @@ func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_AllowsBelow5hT
 	require.Equal(t, int64(35101), account.ID)
 }
 
+func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_Ignores5hWhen7dNearZero(t *testing.T) {
+	ctx := context.Background()
+	primary := Account{
+		ID:          35111,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    0,
+		Extra: map[string]any{
+			"codex_5h_used_percent":   100.0,
+			"codex_7d_used_percent":   3.0,
+			"auto_pause_5h_threshold": 0.95,
+		},
+	}
+	secondary := Account{ID: 35112, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	svc := &OpenAIGatewayService{accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{primary, secondary}}, cfg: &config.Config{}}
+
+	account, err := svc.SelectAccountForModelWithExclusions(ctx, nil, "", "gpt-5.1", nil)
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, int64(35111), account.ID)
+}
+
+func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_Ignores5hWhen7dZero(t *testing.T) {
+	ctx := context.Background()
+	primary := Account{
+		ID:          35116,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    0,
+		Extra: map[string]any{
+			"codex_5h_used_percent":   100.0,
+			"codex_7d_used_percent":   0.0,
+			"auto_pause_5h_threshold": 0.95,
+		},
+	}
+	secondary := Account{ID: 35117, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	svc := &OpenAIGatewayService{accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{primary, secondary}}, cfg: &config.Config{}}
+
+	account, err := svc.SelectAccountForModelWithExclusions(ctx, nil, "", "gpt-5.1", nil)
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, int64(35116), account.ID)
+}
+
+func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_5hStillPausesWhen7dAboveNearZero(t *testing.T) {
+	ctx := context.Background()
+	primary := Account{
+		ID:          35121,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    0,
+		Extra: map[string]any{
+			"codex_5h_used_percent":   100.0,
+			"codex_7d_used_percent":   3.1,
+			"auto_pause_5h_threshold": 0.95,
+		},
+	}
+	secondary := Account{ID: 35122, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	svc := &OpenAIGatewayService{accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{primary, secondary}}, cfg: &config.Config{}}
+
+	account, err := svc.SelectAccountForModelWithExclusions(ctx, nil, "", "gpt-5.1", nil)
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, int64(35122), account.ID)
+}
+
+func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_5hStillPausesWhen7dMissing(t *testing.T) {
+	ctx := context.Background()
+	primary := Account{
+		ID:          35131,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    0,
+		Extra: map[string]any{
+			"codex_5h_used_percent":   100.0,
+			"auto_pause_5h_threshold": 0.95,
+		},
+	}
+	secondary := Account{ID: 35132, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	svc := &OpenAIGatewayService{accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{primary, secondary}}, cfg: &config.Config{}}
+
+	account, err := svc.SelectAccountForModelWithExclusions(ctx, nil, "", "gpt-5.1", nil)
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, int64(35132), account.ID)
+}
+
 func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_AutoPauseBy7dThreshold(t *testing.T) {
 	ctx := context.Background()
 	primary := Account{
