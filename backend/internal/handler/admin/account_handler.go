@@ -701,6 +701,46 @@ func (h *AccountHandler) List(c *gin.Context) {
 	response.Paginated(c, result, total, page, pageSize)
 }
 
+func (h *AccountHandler) ListIDs(c *gin.Context) {
+	platform := c.Query("platform")
+	accountType := c.Query("type")
+	status := c.Query("status")
+	search := strings.TrimSpace(c.Query("search"))
+	if len(search) > 100 {
+		search = search[:100]
+	}
+	privacyMode := strings.TrimSpace(c.Query("privacy_mode"))
+
+	var groupID int64
+	if groupIDStr := c.Query("group"); groupIDStr != "" {
+		if groupIDStr == accountListGroupUngroupedQueryValue {
+			groupID = service.AccountListGroupUngrouped
+		} else {
+			parsedGroupID, parseErr := strconv.ParseInt(groupIDStr, 10, 64)
+			if parseErr != nil || parsedGroupID < 0 {
+				response.ErrorFrom(c, infraerrors.BadRequest("INVALID_GROUP_FILTER", "invalid group filter"))
+				return
+			}
+			groupID = parsedGroupID
+		}
+	}
+
+	accounts, err := h.adminService.ListAccountsForSchedulerScoreFilter(c.Request.Context(), platform, accountType, status, search, groupID, privacyMode)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	ids := make([]int64, 0, len(accounts))
+	for _, account := range accounts {
+		ids = append(ids, account.ID)
+	}
+
+	response.Success(c, gin.H{
+		"ids":   ids,
+		"total": len(ids),
+	})
+}
+
 func buildAccountsListETag(
 	items []AccountWithConcurrency,
 	total int64,

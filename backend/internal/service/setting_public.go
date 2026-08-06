@@ -355,7 +355,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 
 		AffiliateEnabled: settings[SettingKeyAffiliateEnabled] == "true",
 
-		RiskControlEnabled: settings[SettingKeyRiskControlEnabled] == "true",
+		RiskControlEnabled:            settings[SettingKeyRiskControlEnabled] == "true",
+		AccountExpiryAutoPauseEnabled: s.GetAccountExpiryAutoPauseEnabled(ctx),
 
 		AllowUserViewErrorRequests: settings[SettingKeyAllowUserViewErrorRequests] == "true",
 	}, nil

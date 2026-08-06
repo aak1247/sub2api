@@ -433,6 +433,13 @@ const (
 	SettingKeyRateLimit429CooldownSettings = "rate_limit_429_cooldown_settings"
 
 	// =========================
+	// OpenAI Quota Auto-Pause
+	// =========================
+
+	// SettingKeyOpenAIQuotaAutoPauseSettings stores JSON config for OpenAI account quota auto-pause thresholds.
+	SettingKeyOpenAIQuotaAutoPauseSettings = "openai_quota_auto_pause_settings"
+
+	// =========================
 	// Stream Timeout Handling
 	// =========================
 

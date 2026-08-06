@@ -750,6 +750,84 @@ func (s *SettingService) SetRateLimit429CooldownSettings(ctx context.Context, se
 	return s.settingRepo.Set(ctx, SettingKeyRateLimit429CooldownSettings, string(data))
 }
 
+// GetOpenAIQuotaAutoPauseSystemSettings 获取 OpenAI 配额自动暂停配置。
+//
+// 该独立设置页与 ops advanced settings 共用同一份持久化配置，避免调度热路径读取
+// 和管理面板写入出现双源状态。
+func (s *SettingService) GetOpenAIQuotaAutoPauseSystemSettings(ctx context.Context) (*OpenAIQuotaAutoPauseSettings, error) {
+	cfg, err := s.loadOpsAdvancedSettingsForUpdate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return openAIQuotaAutoPauseSettingsFromOps(cfg.OpenAIAccountQuotaAutoPause), nil
+}
+
+// SetOpenAIQuotaAutoPauseSystemSettings 设置 OpenAI 配额自动暂停配置。
+func (s *SettingService) SetOpenAIQuotaAutoPauseSystemSettings(ctx context.Context, settings *OpenAIQuotaAutoPauseSettings) error {
+	if settings == nil {
+		return fmt.Errorf("settings cannot be nil")
+	}
+	if s == nil || s.settingRepo == nil {
+		return fmt.Errorf("setting repository not initialized")
+	}
+
+	cfg, err := s.loadOpsAdvancedSettingsForUpdate(ctx)
+	if err != nil {
+		return err
+	}
+	if settings.Enabled {
+		cfg.OpenAIAccountQuotaAutoPause = OpsOpenAIAccountQuotaAutoPauseSettings{
+			DefaultThreshold5h: clampOpsQuotaAutoPauseThreshold(settings.DefaultThreshold5h),
+			DefaultThreshold7d: clampOpsQuotaAutoPauseThreshold(settings.DefaultThreshold7d),
+		}
+	} else {
+		cfg.OpenAIAccountQuotaAutoPause = OpsOpenAIAccountQuotaAutoPauseSettings{}
+	}
+	normalizeOpsAdvancedSettings(cfg)
+
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal ops advanced settings: %w", err)
+	}
+	if err := s.settingRepo.Set(ctx, SettingKeyOpsAdvancedSettings, string(data)); err != nil {
+		return fmt.Errorf("set ops advanced settings: %w", err)
+	}
+	s.SetOpenAIQuotaAutoPauseSettings(cfg.OpenAIAccountQuotaAutoPause)
+	return nil
+}
+
+func (s *SettingService) loadOpsAdvancedSettingsForUpdate(ctx context.Context) (*OpsAdvancedSettings, error) {
+	if s == nil || s.settingRepo == nil {
+		return defaultOpsAdvancedSettings(), nil
+	}
+	cfg := defaultOpsAdvancedSettings()
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyOpsAdvancedSettings)
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return cfg, nil
+		}
+		return nil, fmt.Errorf("get ops advanced settings: %w", err)
+	}
+	if strings.TrimSpace(value) == "" {
+		return cfg, nil
+	}
+	if err := json.Unmarshal([]byte(value), cfg); err != nil {
+		return nil, fmt.Errorf("parse ops advanced settings: %w", err)
+	}
+	normalizeOpsAdvancedSettings(cfg)
+	return cfg, nil
+}
+
+func openAIQuotaAutoPauseSettingsFromOps(settings OpsOpenAIAccountQuotaAutoPauseSettings) *OpenAIQuotaAutoPauseSettings {
+	threshold5h := clampOpsQuotaAutoPauseThreshold(settings.DefaultThreshold5h)
+	threshold7d := clampOpsQuotaAutoPauseThreshold(settings.DefaultThreshold7d)
+	return &OpenAIQuotaAutoPauseSettings{
+		Enabled:            threshold5h > 0 || threshold7d > 0,
+		DefaultThreshold5h: threshold5h,
+		DefaultThreshold7d: threshold7d,
+	}
+}
+
 // GetStreamTimeoutSettings 获取流超时处理配置
 func (s *SettingService) GetStreamTimeoutSettings(ctx context.Context) (*StreamTimeoutSettings, error) {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeyStreamTimeoutSettings)

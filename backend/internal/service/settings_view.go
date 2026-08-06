@@ -163,19 +163,20 @@ type SystemSettings struct {
 	CustomMenuItems             string // JSON array of custom menu items
 	CustomEndpoints             string // JSON array of custom endpoints
 
-	DefaultConcurrency           int
-	DefaultBalance               float64
-	RiskControlEnabled           bool
-	CyberSessionBlockEnabled     bool
-	CyberSessionBlockTTLSeconds  int
-	AffiliateEnabled             bool
-	AffiliateRebateRate          float64
-	AffiliateRebateFreezeHours   int
-	AffiliateRebateDurationDays  int
-	AffiliateRebatePerInviteeCap float64
-	AdminRechargeRebateEnabled   bool
-	DefaultUserRPMLimit          int
-	DefaultSubscriptions         []DefaultSubscriptionSetting
+	DefaultConcurrency            int
+	DefaultBalance                float64
+	RiskControlEnabled            bool
+	AccountExpiryAutoPauseEnabled bool
+	CyberSessionBlockEnabled      bool
+	CyberSessionBlockTTLSeconds   int
+	AffiliateEnabled              bool
+	AffiliateRebateRate           float64
+	AffiliateRebateFreezeHours    int
+	AffiliateRebateDurationDays   int
+	AffiliateRebatePerInviteeCap  float64
+	AdminRechargeRebateEnabled    bool
+	DefaultUserRPMLimit           int
+	DefaultSubscriptions          []DefaultSubscriptionSetting
 
 	// Model fallback configuration
 	EnableModelFallback      bool   `json:"enable_model_fallback"`
@@ -231,6 +232,7 @@ type SystemSettings struct {
 	OpenAICodexClientVersion               string // 出站声明的 Codex 客户端版本号（管理员覆写）；空值跟随自动同步值
 	OpenAICodexClientVersionSynced         string // 自动同步到的官方最新稳定版版本号（只读展示）
 	OpenAICodexVersionAutoSyncEnabled      bool   // 是否启用 Codex 客户端版本号自动同步（默认 true）
+	OpenAIAllowClaudeCodeCodexPlugin       bool   // 已废弃：历史全局开关只作为升级迁移输入读取
 	MinCodexVersion                        string // codex_cli_only 最低 Codex 引擎版本；空=不检查
 	MaxCodexVersion                        string // codex_cli_only 最高 Codex 引擎版本；空=不检查
 	CodexCLIOnlyBlacklist                  string // codex_cli_only 全局黑名单 JSON（[]AllowedClientEntry，OR deny）
@@ -375,6 +377,9 @@ type PublicSettings struct {
 
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
+
+	// 账号过期自动暂停开关
+	AccountExpiryAutoPauseEnabled bool `json:"account_expiry_auto_pause_enabled"`
 
 	// 允许终端用户在用量页查看自己的失败请求
 	AllowUserViewErrorRequests bool `json:"allow_user_view_error_requests"`
@@ -538,6 +543,25 @@ type RateLimit429CooldownSettings struct {
 	Enabled bool `json:"enabled"`
 	// CooldownSeconds 默认回避时长（秒）
 	CooldownSeconds int `json:"cooldown_seconds"`
+}
+
+// OpenAIQuotaAutoPauseSettings OpenAI 账号配额自动暂停配置
+type OpenAIQuotaAutoPauseSettings struct {
+	// Enabled 是否启用全局默认用量阈值自动暂停
+	Enabled bool `json:"enabled"`
+	// DefaultThreshold5h 默认 5h 用量阈值 (0-1, 0=不限制)
+	DefaultThreshold5h float64 `json:"default_threshold_5h"`
+	// DefaultThreshold7d 默认 7d 用量阈值 (0-1, 0=不限制)
+	DefaultThreshold7d float64 `json:"default_threshold_7d"`
+}
+
+// DefaultOpenAIQuotaAutoPauseSettings 返回默认的 OpenAI 配额自动暂停配置（禁用）
+func DefaultOpenAIQuotaAutoPauseSettings() *OpenAIQuotaAutoPauseSettings {
+	return &OpenAIQuotaAutoPauseSettings{
+		Enabled:            false,
+		DefaultThreshold5h: 0,
+		DefaultThreshold7d: 0,
+	}
 }
 
 // DefaultOverloadCooldownSettings 返回默认的过载冷却配置（启用，10分钟）

@@ -162,15 +162,16 @@ type SystemSettings struct {
 	CustomMenuItems             []CustomMenuItem `json:"custom_menu_items"`
 	CustomEndpoints             []CustomEndpoint `json:"custom_endpoints"`
 
-	DefaultConcurrency           int                          `json:"default_concurrency"`
-	DefaultBalance               float64                      `json:"default_balance"`
-	AffiliateRebateRate          float64                      `json:"affiliate_rebate_rate"`
-	AffiliateRebateFreezeHours   int                          `json:"affiliate_rebate_freeze_hours"`
-	AffiliateRebateDurationDays  int                          `json:"affiliate_rebate_duration_days"`
-	AffiliateRebatePerInviteeCap float64                      `json:"affiliate_rebate_per_invitee_cap"`
-	AdminRechargeRebateEnabled   bool                         `json:"affiliate_admin_recharge_enabled"`
-	DefaultUserRPMLimit          int                          `json:"default_user_rpm_limit"`
-	DefaultSubscriptions         []DefaultSubscriptionSetting `json:"default_subscriptions"`
+	DefaultConcurrency            int                          `json:"default_concurrency"`
+	DefaultBalance                float64                      `json:"default_balance"`
+	AffiliateRebateRate           float64                      `json:"affiliate_rebate_rate"`
+	AffiliateRebateFreezeHours    int                          `json:"affiliate_rebate_freeze_hours"`
+	AffiliateRebateDurationDays   int                          `json:"affiliate_rebate_duration_days"`
+	AffiliateRebatePerInviteeCap  float64                      `json:"affiliate_rebate_per_invitee_cap"`
+	AdminRechargeRebateEnabled    bool                         `json:"affiliate_admin_recharge_enabled"`
+	DefaultUserRPMLimit           int                          `json:"default_user_rpm_limit"`
+	DefaultSubscriptions          []DefaultSubscriptionSetting `json:"default_subscriptions"`
+	AccountExpiryAutoPauseEnabled bool                         `json:"account_expiry_auto_pause_enabled"`
 
 	// Model fallback configuration
 	EnableModelFallback      bool   `json:"enable_model_fallback"`
@@ -213,6 +214,7 @@ type SystemSettings struct {
 	OpenAICodexClientVersion               string `json:"openai_codex_client_version"`
 	OpenAICodexClientVersionSynced         string `json:"openai_codex_client_version_synced"`
 	OpenAICodexVersionAutoSyncEnabled      bool   `json:"openai_codex_version_auto_sync_enabled"`
+	OpenAIAllowClaudeCodeCodexPlugin       bool   `json:"openai_allow_claude_code_codex_plugin"`
 
 	// codex_cli_only 加固
 	MinCodexVersion                      string `json:"min_codex_version"`
@@ -408,6 +410,8 @@ type PublicSettings struct {
 
 	RiskControlEnabled bool `json:"risk_control_enabled"`
 
+	AccountExpiryAutoPauseEnabled bool `json:"account_expiry_auto_pause_enabled"`
+
 	AllowUserViewErrorRequests bool `json:"allow_user_view_error_requests"`
 }
 
@@ -427,6 +431,13 @@ type OverloadCooldownSettings struct {
 type RateLimit429CooldownSettings struct {
 	Enabled         bool `json:"enabled"`
 	CooldownSeconds int  `json:"cooldown_seconds"`
+}
+
+// OpenAIQuotaAutoPauseSettings OpenAI 配额自动暂停配置 DTO
+type OpenAIQuotaAutoPauseSettings struct {
+	Enabled            bool    `json:"enabled"`
+	DefaultThreshold5h float64 `json:"default_threshold_5h"`
+	DefaultThreshold7d float64 `json:"default_threshold_7d"`
 }
 
 // PanelRateLimitSettings 面板 API 限流配置 DTO

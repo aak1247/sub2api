@@ -36,14 +36,18 @@ type DataPayload struct {
 }
 
 type DataProxy struct {
-	ProxyKey string `json:"proxy_key"`
-	Name     string `json:"name"`
-	Protocol string `json:"protocol"`
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-	Status   string `json:"status"`
+	ProxyKey        string `json:"proxy_key"`
+	Name            string `json:"name"`
+	Protocol        string `json:"protocol"`
+	Host            string `json:"host"`
+	Port            int    `json:"port"`
+	Username        string `json:"username,omitempty"`
+	Password        string `json:"password,omitempty"`
+	Status          string `json:"status"`
+	ExpiresAt       *int64 `json:"expires_at,omitempty"`
+	FallbackMode    string `json:"fallback_mode,omitempty"`
+	BackupProxyName string `json:"backup_proxy_name,omitempty"`
+	ExpiryWarnDays  int    `json:"expiry_warn_days,omitempty"`
 }
 
 // DataAccount 是管理员显式备份导出使用的账号结构，故意不走 dto.Account 的脱敏路径，

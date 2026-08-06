@@ -1,0 +1,86 @@
+{
+  "format_version": 1,
+  "bug_id": "BUG-COMPLIANCE-ACCEPT-404",
+  "title": "Admin compliance accept API returns 404",
+  "status": "READY_FOR_VERIFY",
+  "scope": "API",
+  "severity": "S2",
+  "priority": "P2",
+  "reporter": "aak1247",
+  "assignee": "codex",
+  "created_at": "2026-08-06T15:51:06Z",
+  "updated_at": "2026-08-06T15:58:18Z",
+  "impact_modules": [
+    "backend/routes",
+    "admin-compliance",
+    "frontend"
+  ],
+  "impact_summary": "",
+  "environment": "production https://sub2api.atools.live after latest image push",
+  "tags": [],
+  "links": {
+    "issue_url": "",
+    "pr_url": "",
+    "commit": ""
+  },
+  "reproduction": {
+    "preconditions": [
+      "admin user is authenticated",
+      "compliance accept flow is triggered"
+    ],
+    "steps": [
+      "POST /api/v1/admin/compliance/accept"
+    ],
+    "e2e_full_flow": [],
+    "expected": "API route exists and records/accepts compliance status",
+    "actual": "404 Not Found",
+    "attempts": 1,
+    "successes": 1,
+    "probability": "100.0%",
+    "notes": ""
+  },
+  "tracking": {
+    "next_check_date": "2026-08-06",
+    "blockers": [],
+    "latest_push_action": "",
+    "progress": [
+      {
+        "at": "2026-08-06T15:51:06Z",
+        "by": "aak1247",
+        "status": "REPRODUCED",
+        "action": "Bug intake completed and saved",
+        "note": "Capture bug basics and reproduction signals"
+      },
+      {
+        "at": "2026-08-06T15:55:08Z",
+        "by": "aak1247",
+        "status": "READY_FOR_VERIFY",
+        "action": "Rebuild and push Docker image containing restored admin compliance routes",
+        "note": "Restored /api/v1/admin/compliance and /api/v1/admin/compliance/accept route registration; added route coverage test; go build ./cmd/server passes.",
+        "next_check_date": "2026-08-06"
+      },
+      {
+        "at": "2026-08-06T15:58:18Z",
+        "by": "aak1247",
+        "status": "READY_FOR_VERIFY",
+        "action": "Deploy or restart production service with digest sha256:199aac0a87d85e56235cd03a040f996f39e94023b5b3449d3bc3884d0cd421f6, then re-probe POST /api/v1/admin/compliance/accept",
+        "note": "Registry latest now points to fixed digest sha256:199aac0a87d85e56235cd03a040f996f39e94023b5b3449d3bc3884d0cd421f6. Direct production probe still returns 404, indicating the live instance has not picked up the new image.",
+        "next_check_date": "2026-08-06"
+      }
+    ]
+  },
+  "resolution": {
+    "root_cause": "",
+    "fix_summary": "",
+    "pr_url": "",
+    "commit": "",
+    "resolved_at": ""
+  },
+  "regression_test": {
+    "path": "",
+    "command": "",
+    "framework": "",
+    "last_run_at": "",
+    "result": ""
+  }
+}

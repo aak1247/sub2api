@@ -1763,12 +1763,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.RiskControlEnabled
 		}(),
-			AccountExpiryAutoPauseEnabled: func() bool {
-				if req.AccountExpiryAutoPauseEnabled != nil {
-					return *req.AccountExpiryAutoPauseEnabled
-				}
-				return previousSettings.AccountExpiryAutoPauseEnabled
-			}(),
+		AccountExpiryAutoPauseEnabled: func() bool {
+			if req.AccountExpiryAutoPauseEnabled != nil {
+				return *req.AccountExpiryAutoPauseEnabled
+			}
+			return previousSettings.AccountExpiryAutoPauseEnabled
+		}(),
 	}
 
 	// req.AuthSourceXxxPlatformQuotas 为 nil 表示本次请求未包含该 source 的 quota 配置（保留 previousAuthSourceDefaults 中的值）；
