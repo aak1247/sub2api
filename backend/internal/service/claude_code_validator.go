@@ -47,6 +47,23 @@ var claudeCodeSystemPrompts = []string{
 	"You are an interactive CLI tool that helps users",
 }
 
+const (
+	// These markers identify Claude Code's official security-monitor classifier
+	// request without coupling validation to every wording change in the prompt.
+	claudeCodeSecurityMonitorPromptPrefix = "You are a security monitor for autonomous AI coding agents."
+	claudeCodeSecurityMonitorPromptMinLen = 10_000
+
+	// claudeCodeBillingHeaderPrefix 是 Claude Code 在 system 数组首块注入的计费归因块前缀。
+	// 大多数真实 CLI 请求（含部分无身份 prose 的子请求）会携带该块；不携带该块的
+	// 固定官方辅助请求由独立规则识别。该格式比身份 prose 更稳定。
+	// 生成见 gateway_billing_block.go；同类识别见 pkg/apicompat/anthropic_to_responses.go。
+	claudeCodeBillingHeaderPrefix = "x-anthropic-billing-header"
+	// claudeCodeEntrypointMarker 标识计费块携带入口归因字段。不绑定具体入口值
+	// （cli / claude-vscode / jetbrains / sdk 等都是真实入口）：入口值会随新增 IDE 漂移，
+	// 且伪造者同样可填任意值、不构成防伪边界，故仅要求该字段存在即可。
+	claudeCodeEntrypointMarker = "cc_entrypoint="
+)
+
 // NewClaudeCodeValidator 创建验证器实例
 func NewClaudeCodeValidator() *ClaudeCodeValidator {
 	return &ClaudeCodeValidator{}
@@ -155,6 +172,10 @@ func (v *ClaudeCodeValidator) hasClaudeCodeSystemPrompt(body map[string]any) boo
 		return false
 	}
 
+	if isClaudeCodeSecurityMonitorPrompt(systemEntries) {
+		return true
+	}
+
 	// 检查每个 system entry
 	for _, entry := range systemEntries {
 		entryMap, ok := entry.(map[string]any)
@@ -167,6 +188,13 @@ func (v *ClaudeCodeValidator) hasClaudeCodeSystemPrompt(body map[string]any) boo
 			continue
 		}
 
+		// 计费归因块识别（WHY 见 claudeCodeBillingHeaderPrefix 注释）。先于 Dice 检查，
+		// 大小写敏感：该块由 gateway_billing_block.go 固定小写生成。
+		if strings.HasPrefix(text, claudeCodeBillingHeaderPrefix) &&
+			strings.Contains(text, claudeCodeEntrypointMarker) {
+			return true
+		}
+
 		// 计算与所有模板的最佳相似度
 		bestScore := v.bestSimilarityScore(text)
 		if bestScore >= systemPromptThreshold {
@@ -175,6 +203,57 @@ func (v *ClaudeCodeValidator) hasClaudeCodeSystemPrompt(body map[string]any) boo
 	}
 
 	return false
+}
+
+// claudeCodeSecurityMonitorMarkers 与固定前缀、长度下限共同构成分类器提示词的
+// 判别条件，须全部命中。
+var claudeCodeSecurityMonitorMarkers = []string{
+	"## Threat Model",
+	"- `<transcript>`:",
+	"## HARD BLOCK",
+	"## SOFT BLOCK",
+	"## Classification Process",
+	"## Output Format",
+	"<block>yes</block>",
+	"<block>no</block>",
+}
+
+// isClaudeCodeSecurityMonitorPrompt 识别 Claude Code auto 模式安全监视器分类器请求。
+// 真实 CLI（实测 2.1.220）会在监视器提示词之外追加独立的会话上下文 system 块，
+// entry 数量不受服务端控制，故逐 entry 查找匹配项而非限定恰好一个 entry。
+func isClaudeCodeSecurityMonitorPrompt(systemEntries []any) bool {
+	for _, raw := range systemEntries {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		entryType, ok := entry["type"].(string)
+		if !ok || entryType != "text" {
+			continue
+		}
+
+		text, ok := entry["text"].(string)
+		if !ok || len(text) < claudeCodeSecurityMonitorPromptMinLen ||
+			!strings.HasPrefix(text, claudeCodeSecurityMonitorPromptPrefix) {
+			continue
+		}
+
+		if hasAllClaudeCodeSecurityMonitorMarkers(text) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasAllClaudeCodeSecurityMonitorMarkers(text string) bool {
+	for _, marker := range claudeCodeSecurityMonitorMarkers {
+		if !strings.Contains(text, marker) {
+			return false
+		}
+	}
+	return true
 }
 
 // bestSimilarityScore 计算文本与所有 Claude Code 模板的最佳相似度

@@ -23,6 +23,7 @@ vi.mock('@/api/admin', () => ({
       list: listAccounts,
       listWithEtag,
       getBatchTodayStats,
+      getUpstreamBillingProbeSettings: vi.fn().mockResolvedValue({ enabled: true, interval_minutes: 30 }),
       delete: vi.fn(),
       batchClearError: vi.fn(),
       batchRefresh: vi.fn(),
@@ -67,17 +68,16 @@ const DataTableStub = {
   template: `
     <div data-test="data-table">
       <template v-for="column in columns" :key="column.key">
-        <div v-if="column.key === 'usage_window_refreshed_at'" data-test="usage-header">
+        <div v-if="column.key === 'usage'" data-test="usage-header">
+          <slot :name="'header-' + column.key" :column="column" />
+        </div>
+        <div v-if="column.key === 'upstream_billing_rate'" data-test="upstream-billing-header">
           <slot :name="'header-' + column.key" :column="column" />
         </div>
       </template>
-      <template v-for="row in data" :key="row.id">
-        <template v-for="column in columns" :key="column.key">
-          <div v-if="column.key === 'usage_window_refreshed_at'" data-test="usage-cell">
-            <slot :name="'cell-' + column.key" :row="row" :value="row[column.key]" />
-          </div>
-        </template>
-      </template>
+      <div v-for="row in data" :key="row.id" data-test="account-rate">
+        <slot name="cell-rate_multiplier" :row="row" />
+      </div>
     </div>
   `
 }
@@ -121,7 +121,7 @@ function mountView() {
         AccountStatusIndicator: true,
         AccountTodayStatsCell: true,
         AccountGroupsCell: true,
-        AccountUsageCell: { template: '<div data-test="account-usage-cell"></div>' },
+        AccountUsageCell: true,
         Icon: true
       }
     }
@@ -169,36 +169,47 @@ describe('admin AccountsView usage windows hint', () => {
     expect(hint.text()).toBe('admin.accounts.usageWindowsHint')
   })
 
-  it('renders the usage cell on the usage windows column key', async () => {
+  it('keeps Ollama Cloud in the single usage column and ignores legacy column preferences', async () => {
+    localStorage.setItem('account-hidden-columns', JSON.stringify(['ollama_cloud_usage']))
+    const wrapper = mountView()
+    await flushPromises()
+
+    const columns = wrapper.getComponent(DataTableStub).props('columns') as Array<{ key: string }>
+    expect(columns.filter(column => column.key === 'usage')).toHaveLength(1)
+    expect(columns.some(column => column.key === 'ollama_cloud_usage')).toBe(false)
+  })
+
+  it('renders the upstream billing trust warning next to the declared-rate column', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const header = wrapper.find('[data-test="upstream-billing-header"]')
+    expect(header.exists()).toBe(true)
+    expect(header.text()).toContain('admin.accounts.columns.upstreamBillingRate')
+    expect(wrapper.findAll('[data-test="usage-windows-hint"]').some(node =>
+      node.text() === 'admin.accounts.upstreamBilling.trustWarning'
+    )).toBe(true)
+    const columns = wrapper.getComponent(DataTableStub).props('columns') as Array<{ key: string; sortable: boolean }>
+    expect(columns.find(column => column.key === 'upstream_billing_rate')?.sortable).toBe(true)
+  })
+
+  it('shows account multipliers with enough precision to match declared rates', async () => {
     listAccounts.mockResolvedValueOnce({
-      items: [
-        {
-          id: 1,
-          name: 'OpenAI OAuth',
-          platform: 'openai',
-          type: 'oauth',
-          proxy_id: null,
-          concurrency: 1,
-          priority: 0,
-          status: 'active',
-          error_message: null,
-          last_used_at: null,
-          expires_at: null,
-          auto_pause_on_expired: true,
-          created_at: '2026-06-03T00:00:00Z',
-          updated_at: '2026-06-03T00:00:00Z',
-          schedulable: true,
-          rate_limited_at: null,
-          rate_limit_reset_at: null,
-          overload_until: null,
-          temp_unschedulable_until: null,
-          temp_unschedulable_reason: null,
-          session_window_start: null,
-          session_window_end: null,
-          session_window_status: null,
-          groups: []
-        }
-      ],
+      items: [{
+        id: 7,
+        name: 'precision-account',
+        platform: 'gemini',
+        type: 'apikey',
+        status: 'active',
+        schedulable: true,
+        rate_multiplier: 0.065,
+        extra: {
+          upstream_billing_probe_enabled: true,
+          upstream_billing_rate_sync_enabled: true
+        },
+        created_at: '2026-07-13T00:00:00Z',
+        updated_at: '2026-07-13T00:00:00Z'
+      }],
       total: 1,
       page: 1,
       page_size: 20,
@@ -208,7 +219,8 @@ describe('admin AccountsView usage windows hint', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    expect(wrapper.find('[data-test="usage-cell"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="account-usage-cell"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="account-rate"]').text()).toBe('0.065x')
+    const indicator = wrapper.get('[data-testid="account-rate-sync-indicator"]')
+    expect(indicator.attributes('title')).toBe('admin.accounts.upstreamBilling.syncedRateTooltip')
   })
 })
