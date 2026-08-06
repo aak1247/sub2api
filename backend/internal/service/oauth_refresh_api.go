@@ -372,6 +372,27 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	}, nil
 }
 
+type forcedOAuthRefreshExecutor struct {
+	OAuthRefreshExecutor
+}
+
+func (e *forcedOAuthRefreshExecutor) NeedsRefresh(_ *Account, _ time.Duration) bool {
+	return true
+}
+
+// RefreshForced forces a refresh attempt while preserving the same lock/reload/persist path.
+func (api *OAuthRefreshAPI) RefreshForced(
+	ctx context.Context,
+	account *Account,
+	executor OAuthRefreshExecutor,
+	refreshWindow time.Duration,
+) (*OAuthRefreshResult, error) {
+	if executor == nil {
+		return nil, errors.New("oauth refresh executor is nil")
+	}
+	return api.RefreshIfNeeded(ctx, account, &forcedOAuthRefreshExecutor{OAuthRefreshExecutor: executor}, refreshWindow)
+}
+
 func (api *OAuthRefreshAPI) releaseRefreshLock(parent context.Context, cacheKey string) {
 	cleanupParent := context.Background()
 	if parent != nil {

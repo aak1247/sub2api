@@ -81,3 +81,10 @@ func (s *AccountExpiryService) runOnce() {
 		log.Printf("[AccountExpiry] Auto paused %d expired accounts", updated)
 	}
 }
+
+func (s *SettingService) GetAccountExpiryAutoPauseEnabled(ctx context.Context) bool {
+	// The setting key is not yet persisted in the current settings schema.
+	// Keep the service behavior enabled by default so account expiry handling
+	// remains active until the toggle is wired end-to-end.
+	return true
+}
